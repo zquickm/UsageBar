@@ -27,7 +27,10 @@ A macOS menu bar app that tracks your AI CLI token usage (Claude Code, Codex, ZC
 ## 安装（约 1 分钟，不需要终端）
 
 1. 从 [Releases](../../releases) 下载 `UsageBar-v*.zip`，解压，把 **UsageBar.app** 拖进「应用程序」（放别处也行）。
-2. 首次打开：**右键 → 打开 → 确认**。应用是 ad-hoc 签名，macOS 提示「无法验证开发者」属正常，之后不再询问；若仍被拦，终端执行 `xattr -cr /Applications/UsageBar.app`。
+2. 首次打开会有一次 Gatekeeper 提示（应用是 ad-hoc 签名、未公证，属正常，只需一次）：
+   - **macOS 15 (Sequoia) 及以上**：双击打开一次，在弹出的提示里选「完成」；然后到 **系统设置 → 隐私与安全性**，往下拉到「安全性」区，点 **「仍要打开」** 并确认。
+   - **macOS 14**：右键 → 打开 → 确认。
+   - 或者用终端一行解决：`xattr -cr /Applications/UsageBar.app`（顺带把提示也免了）。之后正常双击打开，不再询问。
 3. 应用检测到数据引擎 ccusage 未安装时，弹窗里会出现安装卡片——点 **「用 Homebrew 安装」**（或 npm），等几分钟（首次会连 Node 一起装）即可；两者都没有时卡片会给出手动指引。
 
 打开后一分钟内，菜单栏闪电图标即显示今日用量。首次启动可能弹出「UsageBar 想要控制系统事件」——点**允许**，那是它在添加开机自启（不想要可在面板里关掉「开机自启」）。
@@ -99,7 +102,7 @@ MIT — see [LICENSE](LICENSE). ccusage 有其自己的许可条款。
 
 ## English quick start
 
-1. Download `UsageBar-v*.zip` from [Releases](../../releases), unzip, drag **UsageBar.app** to `/Applications`; first launch: right-click → **Open** (ad-hoc signed, one-time Gatekeeper prompt).
+1. Download `UsageBar-v*.zip` from [Releases](../../releases), unzip, drag **UsageBar.app** to `/Applications`. First launch is a one-time Gatekeeper prompt (ad-hoc signed): on macOS 15+ double-click once, choose Done, then **System Settings → Privacy & Security → Open Anyway**; on macOS 14 right-click → **Open**. Or just run `xattr -cr /Applications/UsageBar.app`.
 2. If the data engine [ccusage](https://www.npmjs.com/package/ccusage) isn't installed yet, the popover shows a setup card — click **Install via Homebrew** (or npm) and wait a few minutes. No terminal needed; `brew install ccusage` works too.
 3. Click the ⚡ in the menu bar: today's tokens, with a 7-day chart broken down per tool or per model. Fully local — ccusage reads each CLI's own session logs, nothing leaves your machine.
 
