@@ -33,8 +33,9 @@ APP="$ROOT/${APP_NAME}.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 
-# Convert Icon.icon to Icon.icns if present (requires iconutil).
-ICON_SOURCE="$ROOT/Icon.icon"
+# Convert Icon.iconset to Icon.icns if present (iconutil REQUIRES the
+# .iconset extension — a differently-named folder yields "Invalid Iconset").
+ICON_SOURCE="$ROOT/Icon.iconset"
 ICON_TARGET="$ROOT/Icon.icns"
 if [[ -f "$ICON_SOURCE" ]]; then
   iconutil --convert icns --output "$ICON_TARGET" "$ICON_SOURCE"
