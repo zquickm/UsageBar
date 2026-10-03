@@ -15,6 +15,7 @@ A macOS menu bar app that tracks your AI CLI token usage (Claude Code, Codex, ZC
 - **可定制**：用量列表拖拽排序（记住顺序）、点色块用系统色轮改颜色
 - **终端日报**：底部「终端日报」按钮在 Terminal 打开用量报表；可选安装的 `usage` 命令还能在终端独立使用
 - **开机自启**：面板内开关（登录项方式）
+- **检查更新**：一个按钮查两处——引擎 ccusage 新版（npm registry，一键升级，自动跟随 brew/npm）和 UsageBar 新版（GitHub Release，一键跳转下载）；仅点击时联网
 
 ## 系统要求
 

@@ -74,6 +74,19 @@ final class Store: ObservableObject {
     @Published var engineError: String?
     @Published var hasBrew = false
     @Published var hasNpm = false
+    // one-click update check: upstream engine ccusage AND the app itself
+    @Published var update: UpdateState = .idle
+}
+
+// one available update: engine (ccusage) or the app itself
+struct UpdateItem { let installed: String; let latest: String }
+
+enum UpdateState {
+    case idle
+    case checking
+    case updating
+    // nil item = that side is up to date (or not applicable); error = check failed
+    case result(app: UpdateItem?, engine: UpdateItem?, error: String?)
 }
 
 func human(_ n: Int) -> String {
@@ -202,6 +215,24 @@ func runJSON() -> Payload? {
 }
 
 func ccusageInstalled() -> Bool { shell("command -v ccusage").code == 0 }
+
+// "ccusage 20.0.26" / "v20.0.26\n" → "20.0.26"
+func versionToken(_ s: String) -> String? {
+    s.split(whereSeparator: { $0.isWhitespace || $0 == "v" })
+        .first { $0.contains(".") && $0.split(separator: ".").count >= 2 }
+        .map(String.init)
+}
+
+func newerVersion(_ a: String, _ b: String) -> Bool {  // a > b, dotted numerics
+    let pa = a.split(separator: ".").map { Int($0) ?? 0 }
+    let pb = b.split(separator: ".").map { Int($0) ?? 0 }
+    for i in 0..<max(pa.count, pb.count) {
+        let x = i < pa.count ? pa[i] : 0
+        let y = i < pb.count ? pb[i] : 0
+        if x != y { return x > y }
+    }
+    return false
+}
 
 // ccusage --help enumerates every agent CLI it can parse; each such subcommand
 // line ends with "usage commands". Parsed live so the 支持、无数据 section
@@ -369,6 +400,9 @@ struct ContentView: View {
     var onRefresh: () -> Void
     var onQuit: () -> Void
     var onInstall: (String) -> Void
+    var onCheckUpdate: () -> Void
+    var onPerformUpdate: () -> Void
+    var onAppUpdate: () -> Void
     @State private var selected: DayPoint?
     @State private var mode: ChartMode
     @State private var autostart = false
@@ -381,12 +415,17 @@ struct ContentView: View {
     @State private var hovered: String?
 
     init(store: Store, onDaily: @escaping () -> Void, onRefresh: @escaping () -> Void,
-         onQuit: @escaping () -> Void, onInstall: @escaping (String) -> Void) {
+         onQuit: @escaping () -> Void, onInstall: @escaping (String) -> Void,
+         onCheckUpdate: @escaping () -> Void, onPerformUpdate: @escaping () -> Void,
+         onAppUpdate: @escaping () -> Void) {
         self.store = store
         self.onDaily = onDaily
         self.onRefresh = onRefresh
         self.onQuit = onQuit
         self.onInstall = onInstall
+        self.onCheckUpdate = onCheckUpdate
+        self.onPerformUpdate = onPerformUpdate
+        self.onAppUpdate = onAppUpdate
         _mode = State(initialValue: ProcessInfo.processInfo.environment["USAGEBAR_MODE"] == "model" ? .model : .agent)
     }
 
@@ -499,6 +538,7 @@ struct ContentView: View {
                 chart
                 Divider()
                 valueList
+                updateRow
             }
             HStack {
                 Button("终端日报", action: onDaily).handCursor()
@@ -508,12 +548,63 @@ struct ContentView: View {
                     .help("登录时自动启动（系统设置 → 登录项里可见）")
                     .onChange(of: autostart) { _, on in LoginItem.set(on) }
                 Button("刷新", action: onRefresh).handCursor()
+                Button("检查更新", action: onCheckUpdate).handCursor()
                 Button("退出", action: onQuit).handCursor()
             }.buttonStyle(.borderless)
         }
         .padding(14)
         .frame(width: 380)
         .onAppear { LoginItem.isEnabled { autostart = $0 } }
+    }
+
+    // update status strip (engine ccusage + the app itself); visible while relevant
+    @ViewBuilder
+    var updateRow: some View {
+        switch store.update {
+        case .idle:
+            EmptyView()
+        case .checking:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("检查更新中…").font(.callout).foregroundStyle(.secondary)
+            }
+        case .updating:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("引擎更新中…").font(.callout).foregroundStyle(.secondary)
+            }
+        case .result(let app, let engine, let error):
+            VStack(alignment: .leading, spacing: 4) {
+                if let e = error {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        Text(e).font(.callout).foregroundStyle(.secondary)
+                    }
+                }
+                if let it = engine {
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.up.circle.fill").foregroundStyle(.blue)
+                        Text("引擎 ccusage 新版 \(it.latest)（当前 \(it.installed)）").font(.callout)
+                        Spacer()
+                        Button("更新引擎", action: onPerformUpdate).handCursor()
+                    }
+                }
+                if let it = app {
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.up.circle.fill").foregroundStyle(.blue)
+                        Text("UsageBar 新版 \(it.latest)（当前 \(it.installed)）").font(.callout)
+                        Spacer()
+                        Button("下载更新", action: onAppUpdate).handCursor()
+                    }
+                }
+                if app == nil && engine == nil && error == nil {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        Text("均为最新版本").font(.callout).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
     }
 
     // first-run setup: ccusage missing → offer a one-click install so a fresh
@@ -845,7 +936,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onDaily: { self.openDaily() },
                 onRefresh: { self.refresh() },
                 onQuit: { NSApp.terminate(nil) },
-                onInstall: { self.installEngine($0) }
+                onInstall: { self.installEngine($0) },
+                onCheckUpdate: { self.checkForUpdate() },
+                onPerformUpdate: { self.performUpdate() },
+                onAppUpdate: {
+                    NSWorkspace.shared.open(URL(string: "https://github.com/zquickm/UsageBar/releases/latest")!)
+                }
             ))
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
             if e.keyCode == 53 && self.popover.isShown {  // Esc
@@ -893,6 +989,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if ProcessInfo.processInfo.environment["USAGEBAR_AUTOSHOW"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.showPopover() }
+        }
+        // debug/verification hook: auto-run the update check after the popover
+        if ProcessInfo.processInfo.environment["USAGEBAR_AUTOCHECK"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { self.checkForUpdate() }
         }
     }
 
@@ -953,6 +1053,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     refresh()
                 } else {
                     store.engineError = r.err.split(separator: "\n").suffix(3).joined(separator: "\n")
+                }
+            }
+        }
+    }
+
+    // upstream ccusage: latest version lives on the npm registry (ccusage's
+    // native store — always fresher than the brew formula)
+    // one button, two checks: engine ccusage (npm registry) + the app itself
+    // (GitHub latest release). Engine side is skipped if ccusage isn't installed.
+    func checkForUpdate() {
+        if case .checking = store.update { return }
+        if case .updating = store.update { return }
+        store.update = .checking
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            struct RegLatest: Decodable { let version: String }
+            struct GhLatest: Decodable { let tag_name: String }
+
+            // engine side
+            var engine: UpdateItem?
+            if ccusageInstalled() {
+                let inst = shell("ccusage --version")
+                if inst.code == 0, let installed = versionToken(inst.out) {
+                    let reg = shell("curl -s --max-time 5 https://registry.npmjs.org/ccusage/latest")
+                    if reg.code == 0,
+                       let latest = (try? JSONDecoder().decode(RegLatest.self, from: Data(reg.out.utf8)))?.version,
+                       newerVersion(latest, installed) {
+                        engine = UpdateItem(installed: installed, latest: latest)
+                    }
+                }
+            }
+
+            // app side
+            var app: UpdateItem?
+            var error: String?
+            let appInstalled = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+            let gh = shell("curl -s --max-time 5 https://api.github.com/repos/zquickm/UsageBar/releases/latest")
+            if gh.code == 0,
+               let tag = (try? JSONDecoder().decode(GhLatest.self, from: Data(gh.out.utf8)))?.tag_name {
+                let latest = versionToken(tag) ?? tag
+                if newerVersion(latest, appInstalled) {
+                    app = UpdateItem(installed: appInstalled, latest: latest)
+                }
+            } else {
+                error = "无法访问 GitHub / npm"
+            }
+
+            DispatchQueue.main.async {
+                self.store.update = .result(app: app, engine: engine, error: error)
+            }
+        }
+    }
+
+    // upgrade through whichever manager installed the engine, then re-check
+    func performUpdate() {
+        store.update = .updating
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            let brew = shell("brew list --versions ccusage").code == 0
+            let r = shell(brew ? "brew upgrade ccusage" : "npm install -g ccusage@latest")
+            DispatchQueue.main.async {
+                if r.code == 0 {
+                    self.store.supportedAgents = []  // re-parse agents from the new ccusage
+                    self.refresh()
+                    self.checkForUpdate()
+                } else {
+                    self.store.update = .result(app: nil, engine: nil,
+                        error: r.err.split(separator: "\n").suffix(2).joined(separator: "\n"))
                 }
             }
         }
