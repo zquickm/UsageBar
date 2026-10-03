@@ -290,6 +290,7 @@ struct ContentView: View {
     @AppStorage("usagebar.order.agents") private var storedAgentOrder = ""
     @AppStorage("usagebar.order.models") private var storedModelOrder = ""
     @State private var dragged: String?
+    @State private var hovered: String?
 
     init(store: Store, onDaily: @escaping () -> Void, onRefresh: @escaping () -> Void, onQuit: @escaping () -> Void) {
         self.store = store
@@ -500,7 +501,7 @@ struct ContentView: View {
         let rows = listSeries
         guard let dp = displayPoint else { return AnyView(EmptyView()) }
         let dateLabel = Self.cnDate(dp.date)
-        let height = min(CGFloat(rows.count) * 17 + 24, 200)
+        let height = min(CGFloat(rows.count) * 21 + 24, 200)
         return AnyView(ScrollView {
             VStack(spacing: 3) {
                 HStack(spacing: 6) {
@@ -513,6 +514,7 @@ struct ContentView: View {
                         .foregroundStyle(.tertiary)
                         .frame(width: 92, alignment: .trailing)
                 }
+                .padding(.horizontal, 6)
                 ForEach(rows, id: \.self) { name in
                     seriesRow(name, dp: dp)
                 }
@@ -527,6 +529,36 @@ struct ContentView: View {
 
     // one series row, extracted so the modifier chain stays type-checkable
     func seriesRow(_ name: String, dp: DayPoint) -> some View {
+        rowContent(name, dp: dp)
+            .font(.caption2)
+            .monospacedDigit()
+            .foregroundStyle(name == "总量" ? .primary : .secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(.quaternary)
+                    .opacity(hovered == name && dragged != name ? 1 : 0)
+            )
+            .opacity(dragged == name ? 0.35 : 1)
+            .zIndex(dragged == name ? 1 : 0)
+            .onDrag {
+                dragged = name
+                return NSItemProvider(object: name as NSString)
+            } preview: {
+                dragPreview(name, dp: dp)
+            }
+            .onDrop(of: [.text], delegate: SeriesDropDelegate(item: name, dragged: $dragged, move: { d, t in
+                reorder(d, onto: t)
+            }))
+            .onHover { inside in
+                hovered = inside ? name : (hovered == name ? nil : hovered)
+                if inside { NSCursor.openHand.push() } else { NSCursor.pop() }
+            }
+            .help("拖动调整顺序；色块修改颜色")
+    }
+
+    private func rowContent(_ name: String, dp: DayPoint) -> some View {
         HStack(spacing: 6) {
             // small dot; click → system color panel (wheel / RGB / hex)
             ColorDot(color: color(name), size: 7) { ns in
@@ -545,18 +577,16 @@ struct ContentView: View {
             Text(human(windowTotals[name] ?? 0))
                 .frame(width: 92, alignment: .trailing)
         }
-        .font(.caption2)
-        .monospacedDigit()
-        .foregroundStyle(name == "总量" ? .primary : .secondary)
-        .opacity(dragged == name ? 0.4 : 1)
-        .onDrag {
-            dragged = name
-            return NSItemProvider(object: name as NSString)
-        }
-        .onDrop(of: [.text], delegate: SeriesDropDelegate(item: name, dragged: $dragged, move: { d, t in
-            reorder(d, onto: t)
-        }))
-        .help("拖动调整顺序；色块修改颜色")
+    }
+
+    // the card that follows the cursor while dragging (dnd-kit style):
+    // material background + drop shadow
+    private func dragPreview(_ name: String, dp: DayPoint) -> some View {
+        rowContent(name, dp: dp)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+            .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
     }
 
     var chart: some View {
