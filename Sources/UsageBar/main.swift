@@ -1101,12 +1101,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             DispatchQueue.main.async {
                 self.store.update = .result(app: app, engine: engine, error: error)
+                self.scheduleUpdateDismiss()
+            }
+        }
+    }
+
+    // the result strip is a toast: auto-clear after 10 s. Generation counter
+    // so a re-check or an in-flight 更新引擎 supersedes an older pending timer.
+    private var updateDismissGen = 0
+    func scheduleUpdateDismiss() {
+        updateDismissGen += 1
+        let gen = updateDismissGen
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [self] in
+            if updateDismissGen == gen, case .result = store.update {
+                store.update = .idle
             }
         }
     }
 
     // upgrade through whichever manager installed the engine, then re-check
     func performUpdate() {
+        updateDismissGen += 1  // cancel pending dismiss; .updating must not vanish
         store.update = .updating
         DispatchQueue.global(qos: .userInitiated).async { [self] in
             let brew = shell("brew list --versions ccusage").code == 0
@@ -1119,6 +1134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 } else {
                     self.store.update = .result(app: nil, engine: nil,
                         error: r.err.split(separator: "\n").suffix(2).joined(separator: "\n"))
+                    self.scheduleUpdateDismiss()
                 }
             }
         }
