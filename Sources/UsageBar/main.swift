@@ -2,6 +2,44 @@ import Cocoa
 import SwiftUI
 import Charts
 
+// Classic System Events login item — the mechanism that actually shows up in
+// 系统设置 → 登录项 → 登录时打开. SMAppService was tried first but BTM rejects
+// adhoc-signed apps (register() "succeeds", status stays .notFound).
+enum LoginItem {
+    private static var name: String {
+        URL(fileURLWithPath: Bundle.main.bundlePath).deletingPathExtension().lastPathComponent
+    }
+
+    static func set(_ on: Bool) {
+        let path = Bundle.main.bundlePath
+        let src = on
+            ? "tell application \"System Events\" to make login item at end with properties {path:\"\(path)\", hidden:false}"
+            : "tell application \"System Events\" to delete login item \"\(name)\""
+        DispatchQueue.global(qos: .utility).async { runOSA(src) }
+    }
+
+    static func isEnabled(_ done: @escaping (Bool) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let out = runOSA("tell application \"System Events\" to get the name of every login item")
+            DispatchQueue.main.async { done(out.contains(name)) }
+        }
+    }
+
+    @discardableResult
+    private static func runOSA(_ src: String) -> String {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        p.arguments = ["-e", src]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = Pipe()
+        do { try p.run() } catch { return "" }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+}
+
 // UsageBar — menu bar token display. Click ⚡ for a popover with a 7-day
 // smoothed line chart fed by `~/.local/bin/usage --chart 7`.
 // 总量 only by default; every other agent/model appears exclusively when
@@ -50,7 +88,9 @@ extension Color {
 func runJSON() -> Payload? {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-    p.arguments = ["-c", "~/.local/bin/usage --chart 7"]
+    // launchd/login-window environments carry the bare system PATH; ccusage
+    // lives in homebrew, so prepend the usual bins or `usage` dies at login
+    p.arguments = ["-c", "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; ~/.local/bin/usage --chart 7"]
     let pipe = Pipe()
     p.standardOutput = pipe
     p.standardError = Pipe()
@@ -198,6 +238,7 @@ struct ContentView: View {
     var onQuit: () -> Void
     @State private var selected: DayPoint?
     @State private var mode: ChartMode
+    @State private var autostart = false
     @AppStorage("usagebar.visible.agents") private var storedAgents = ""
     @AppStorage("usagebar.visible.models") private var storedModels = ""
     @AppStorage("usagebar.colors") private var storedColors = ""
@@ -313,12 +354,17 @@ struct ContentView: View {
             HStack {
                 Button("终端日报", action: onDaily).handCursor()
                 Spacer()
+                Toggle("开机自启", isOn: $autostart)
+                    .toggleStyle(.checkbox)
+                    .help("登录时自动启动（系统设置 → 登录项里可见）")
+                    .onChange(of: autostart) { _, on in LoginItem.set(on) }
                 Button("刷新", action: onRefresh).handCursor()
                 Button("退出", action: onQuit).handCursor()
             }.buttonStyle(.borderless)
         }
         .padding(14)
         .frame(width: 380)
+        .onAppear { LoginItem.isEnabled { autostart = $0 } }
     }
 
     var seriesMenu: some View {
@@ -488,6 +534,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        // one-time: add to 登录时打开 (System Events login item). First call
+        // triggers the one-time Automation consent prompt.
+        let ud = UserDefaults.standard
+        if !ud.bool(forKey: "usagebar.autostart.tried") {
+            ud.set(true, forKey: "usagebar.autostart.tried")
+            LoginItem.isEnabled { on in if !on { LoginItem.set(true) } }
+        }
         item.button?.title = "⚡…"
         item.button?.action = #selector(togglePopover)
         item.button?.target = self
