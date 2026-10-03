@@ -41,9 +41,10 @@ enum LoginItem {
 }
 
 // UsageBar — menu bar token display. Click ⚡ for a popover with a 7-day
-// smoothed line chart fed by `~/.local/bin/usage 90 --chart` (90-day fetch so
-// the model dropdown also lists models outside the 7-day chart window; the
-// chart itself slices the last 7 days).
+// smoothed line chart fed by `~/.local/bin/usage 3650 --chart` (full-history
+// fetch so model discovery follows everything ccusage can find; the chart
+// itself slices the last 7 days). The 工具 dropdown's "支持、无数据" section is
+// parsed live from `ccusage --help`, so it tracks the installed ccusage.
 // 总量 only by default; every other agent/model appears exclusively when
 // checked in the dropdown. The list mirrors the chart selection exactly.
 
@@ -64,6 +65,7 @@ final class Store: ObservableObject {
     @Published var total = 0
     @Published var points: [DayPoint] = []
     @Published var knownModels: Set<String> = []  // whole fetch window
+    @Published var supportedAgents: [String] = []  // parsed from ccusage --help
 }
 
 func human(_ n: Int) -> String {
@@ -93,8 +95,8 @@ func runJSON() -> Payload? {
     p.executableURL = URL(fileURLWithPath: "/bin/zsh")
     // launchd/login-window environments carry the bare system PATH; ccusage
     // lives in homebrew, so prepend the usual bins or `usage` dies at login.
-    // 90-day fetch: wider window only for model discovery, chart slices last 7
-    p.arguments = ["-c", "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; ~/.local/bin/usage 90 --chart"]
+    // Full-history fetch: chart slices the last 7, discovery covers everything
+    p.arguments = ["-c", "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; ~/.local/bin/usage 3650 --chart"]
     let pipe = Pipe()
     p.standardOutput = pipe
     p.standardError = Pipe()
@@ -103,6 +105,25 @@ func runJSON() -> Payload? {
     p.waitUntilExit()
     guard p.terminationStatus == 0 else { return nil }
     return try? JSONDecoder().decode(Payload.self, from: data)
+}
+
+// ccusage --help enumerates every agent CLI it can parse; each such subcommand
+// line ends with "usage commands". Parsed live so the 支持、无数据 section
+// follows the installed ccusage version instead of a hardcoded list.
+func parseCCusageAgents() -> [String] {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+    p.arguments = ["-c", "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; ccusage --help"]
+    let pipe = Pipe()
+    p.standardOutput = pipe
+    p.standardError = Pipe()
+    do { try p.run() } catch { return [] }
+    let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    p.waitUntilExit()
+    guard p.terminationStatus == 0 else { return [] }
+    return out.split(separator: "\n")
+        .filter { $0.contains("usage commands") }
+        .compactMap { $0.split(whereSeparator: \.isWhitespace).first.map(String.init) }
 }
 
 // MARK: - Series, defaults & palette
@@ -115,13 +136,6 @@ enum ChartMode: String, CaseIterable {
 let agentOrder = ["总量", "zcode", "codex", "dsh"]
 let agentColor: [String: Color] = ["zcode": .blue, "codex": .purple, "dsh": .orange]
 let modelOrderKnown = ["总量", "GLM-5.3-Flash", "GLM-5.3", "deepseek-flash"]
-let supportedSilentAgents = ["claude", "gemini", "cursor", "grok", "droid", "opencode", "kilo", "qwen", "goose", "copilot"]
-// 套餐/供应商的模型家族；已在 90 天数据里出现过的会自动进入可勾选列表，
-// 这里只显示从未用过的（灰色）。新模型上线后往这里加名字即可。
-let supportedSilentModels = [
-    "GLM-5.3", "GLM-5.3-Flash", "GLM-5.3-Air", "glm-5.3",
-    "deepseek-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner",
-]
 
 func hexOfNS(_ c: NSColor) -> String {
     let srgb = c.usingColorSpace(.sRGB) ?? c
@@ -397,11 +411,12 @@ struct ContentView: View {
                     ))
                 }
             }
-            let silent = (mode == .agent ? supportedSilentAgents : supportedSilentModels)
-                .filter { !discovered.contains($0) }
-            if !silent.isEmpty {
-                Section(mode == .agent ? "支持、近7天无数据" : "支持、无用量（可随时勾选）") {
-                    ForEach(silent, id: \.self) { Text($0).foregroundStyle(.secondary) }
+            if mode == .agent {
+                let silent = store.supportedAgents.filter { !discovered.contains($0) }
+                if !silent.isEmpty {
+                    Section("支持、无数据（来自 ccusage）") {
+                        ForEach(silent, id: \.self) { Text($0).foregroundStyle(.secondary) }
+                    }
                 }
             }
             Button("恢复默认（仅显示总量）") { setVisible([]) }
@@ -651,14 +666,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func refresh() {
         guard !busy else { return }
         busy = true
+        let needAgents = store.supportedAgents.isEmpty
         DispatchQueue.global(qos: .utility).async { [self] in
             let payload = runJSON()
+            let agents = needAgents ? parseCCusageAgents() : []
             DispatchQueue.main.async { [self] in
                 busy = false
                 guard let payload else { item.button?.title = "⚡n/a"; return }
                 store.total = payload.total
                 store.points = Array(payload.days.suffix(7))  // chart window
                 store.knownModels = Set(payload.days.flatMap { $0.models.keys })
+                if !agents.isEmpty { store.supportedAgents = agents }
                 store.title = "⚡" + human(payload.total)
                 item.button?.title = store.title
                 NSLog("UsageBar: title=%@ points=%d", store.title, store.points.count)
