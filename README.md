@@ -36,8 +36,8 @@ cask 安装时自动剥掉隔离标记，装完直接打开，没有 Gatekeeper 
 
 **方式 B：直接下载**
 
-1. 从 [Releases](../../releases) 下载 `UsageBar-v*.zip`，解压，把 **UsageBar.app** 拖进「应用程序」（放别处也行）。
-2. 首次打开会有一次 Gatekeeper 提示（应用是 ad-hoc 签名、未公证，属正常，只需一次）：
+1. 从 [Releases](../../releases) 下载 **`UsageBar-v*.dmg`**，打开，把 **UsageBar** 拖到右边的 **Applications** 文件夹（窗口里有图示），然后推出磁盘镜像。（Release 里另附 zip，供脚本化安装使用）
+2. 首次打开会有一次 Gatekeeper 提示（DMG 安装窗口底部就印着这段指引；应用是 ad-hoc 签名、未公证，属正常，只需一次）：
    - **macOS 15 (Sequoia) 及以上**：双击打开一次，在弹出的提示里选「完成」；然后到 **系统设置 → 隐私与安全性**，往下拉到「安全性」区，点 **「仍要打开」** 并确认。
    - **macOS 14**：右键 → 打开 → 确认。
    - 或者用终端一行解决：`xattr -cr /Applications/UsageBar.app`（顺带把提示也免了）。之后正常双击打开，不再询问。
@@ -112,7 +112,7 @@ MIT — see [LICENSE](LICENSE). ccusage 有其自己的许可条款。
 ## English quick start
 
 1. `brew install --cask zquickm/tap/usagebar` — recommended, no Gatekeeper prompt (the cask strips the quarantine stamp after install).
-2. Or download `UsageBar-v*.zip` from [Releases](../../releases), unzip, drag **UsageBar.app** to `/Applications`. One-time Gatekeeper prompt (ad-hoc signed): on macOS 15+ double-click once, choose Done, then **System Settings → Privacy & Security → Open Anyway**; on macOS 14 right-click → **Open**.
+2. Or download **`UsageBar-v*.dmg`** from [Releases](../../releases), open it, drag **UsageBar** onto the **Applications** folder shown in the window (a Gatekeeper hint is printed right in the install window). One-time prompt (ad-hoc signed): on macOS 15+ double-click once, choose Done, then **System Settings → Privacy & Security → Open Anyway**; on macOS 14 right-click → **Open**.
 3. If the data engine [ccusage](https://www.npmjs.com/package/ccusage) isn't installed yet, the popover shows a setup card — click **Install via Homebrew** (or npm) and wait a few minutes. Fully local — ccusage reads each CLI's own session logs, nothing leaves your machine.
 
 Optional terminal extra: `./install.sh` from a repo clone puts a `usage` CLI in `~/.local/bin` (`usage` = 7-day table, `usage 30`, `usage --bar`). The app itself never needs it.
