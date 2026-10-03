@@ -580,13 +580,31 @@ struct ContentView: View {
     }
 
     // the card that follows the cursor while dragging (dnd-kit style):
-    // material background + drop shadow
+    // material background + drop shadow. Pure SwiftUI dot — the ColorDot
+    // NSViewRepresentable misplaces its dot inside drag-preview snapshots.
     private func dragPreview(_ name: String, dp: DayPoint) -> some View {
-        rowContent(name, dp: dp)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
-            .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
+        HStack(spacing: 6) {
+            Circle()
+                .fill(color(name))
+                .frame(width: 7, height: 7)
+                .frame(width: 16, height: 16)
+            Text(name)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(width: 108, alignment: .leading)
+            Spacer()
+            Text(human(value(dp, name)))
+                .frame(width: 84, alignment: .trailing)
+                .foregroundStyle(.primary)
+            Text(human(windowTotals[name] ?? 0))
+                .frame(width: 92, alignment: .trailing)
+        }
+        .font(.caption2)
+        .monospacedDigit()
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+        .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
     }
 
     var chart: some View {
