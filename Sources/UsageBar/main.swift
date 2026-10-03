@@ -269,7 +269,7 @@ struct SeriesDropDelegate: DropDelegate {
     func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
 
     func performDrop(info: DropInfo) -> Bool {
-        dragged = nil
+        withAnimation(.easeOut(duration: 0.15)) { dragged = nil }
         return true
     }
 }
@@ -477,12 +477,17 @@ struct ContentView: View {
         else { storedModelOrder = arr.joined(separator: ",") }
     }
 
-    func moveDragged(_ d: String, before target: String) {
+    // direction-aware move (dragging down inserts AFTER the target) —
+    // inserting always-before makes the layout shift under the cursor and
+    // the drop target flicker; animated so rows slide like dnd-kit does
+    func reorder(_ d: String, onto target: String) {
         var arr = listSeries
-        guard let di = arr.firstIndex(of: d) else { return }
-        arr.remove(at: di)
-        arr.insert(d, at: arr.firstIndex(of: target) ?? arr.count)
-        persistOrder(arr)
+        guard let from = arr.firstIndex(of: d), let to = arr.firstIndex(of: target), from != to else { return }
+        withAnimation(.snappy(duration: 0.22)) {
+            if to > from { arr.move(fromOffsets: IndexSet(integer: from), toOffset: to + 1) }
+            else { arr.move(fromOffsets: IndexSet(integer: from), toOffset: to) }
+            persistOrder(arr)
+        }
     }
 
     // the list follows the chart hover: whichever day the cursor is on,
@@ -549,7 +554,7 @@ struct ContentView: View {
             return NSItemProvider(object: name as NSString)
         }
         .onDrop(of: [.text], delegate: SeriesDropDelegate(item: name, dragged: $dragged, move: { d, t in
-            moveDragged(d, before: t)
+            reorder(d, onto: t)
         }))
         .help("拖动调整顺序；色块修改颜色")
     }
