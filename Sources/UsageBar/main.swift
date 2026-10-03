@@ -1,6 +1,7 @@
 import Cocoa
 import SwiftUI
 import Charts
+import UniformTypeIdentifiers
 
 // Classic System Events login item — the mechanism that actually shows up in
 // 系统设置 → 登录项 → 登录时打开. SMAppService was tried first but BTM rejects
@@ -253,6 +254,26 @@ extension Notification.Name {
     static let usagebarColorPanelOpening = Notification.Name("usagebarColorPanelOpening")
 }
 
+// live drag-reorder for the series list: hovering the dragged row over
+// another row moves it before that row; the drop itself just ends the session
+struct SeriesDropDelegate: DropDelegate {
+    let item: String
+    @Binding var dragged: String?
+    let move: (String, String) -> Void
+
+    func dropEntered(info: DropInfo) {
+        guard let d = dragged, d != item else { return }
+        move(d, item)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        dragged = nil
+        return true
+    }
+}
+
 // MARK: - Popover
 
 struct ContentView: View {
@@ -266,6 +287,9 @@ struct ContentView: View {
     @AppStorage("usagebar.visible.agents") private var storedAgents = ""
     @AppStorage("usagebar.visible.models") private var storedModels = ""
     @AppStorage("usagebar.colors") private var storedColors = ""
+    @AppStorage("usagebar.order.agents") private var storedAgentOrder = ""
+    @AppStorage("usagebar.order.models") private var storedModelOrder = ""
+    @State private var dragged: String?
 
     init(store: Store, onDaily: @escaping () -> Void, onRefresh: @escaping () -> Void, onQuit: @escaping () -> Void) {
         self.store = store
@@ -419,7 +443,11 @@ struct ContentView: View {
                     }
                 }
             }
-            Button("恢复默认（仅显示总量）") { setVisible([]) }
+            Button("恢复默认（仅显示总量）") {
+                setVisible([])
+                storedAgentOrder = ""
+                storedModelOrder = ""
+            }
         } label: {
             Image(systemName: "slider.horizontal.3")
         }
@@ -429,14 +457,32 @@ struct ContentView: View {
         .help("选择显示的曲线；颜色点列表里的色块修改")
     }
 
-    // the list mirrors the chart selection exactly (series); 总量 pinned
-    // first when visible, the rest by 7-day usage
+    // the list mirrors the chart selection exactly (series). A user-dragged
+    // order (persisted per mode) wins; not-yet-ordered series follow the
+    // default sort (总量 first, then 7-day usage)
     var listSeries: [String] {
+        let saved = storedOrder.split(separator: ",").map(String.init).filter { series.contains($0) }
         let t = windowTotals
-        return series.sorted { a, b in
+        let rest = series.sorted { a, b in
             if (a == "总量") != (b == "总量") { return a == "总量" }
             return (t[a] ?? 0) > (t[b] ?? 0)
-        }
+        }.filter { !saved.contains($0) }
+        return saved + rest
+    }
+
+    private var storedOrder: String { mode == .agent ? storedAgentOrder : storedModelOrder }
+
+    func persistOrder(_ arr: [String]) {
+        if mode == .agent { storedAgentOrder = arr.joined(separator: ",") }
+        else { storedModelOrder = arr.joined(separator: ",") }
+    }
+
+    func moveDragged(_ d: String, before target: String) {
+        var arr = listSeries
+        guard let di = arr.firstIndex(of: d) else { return }
+        arr.remove(at: di)
+        arr.insert(d, at: arr.firstIndex(of: target) ?? arr.count)
+        persistOrder(arr)
     }
 
     // the list follows the chart hover: whichever day the cursor is on,
@@ -463,27 +509,7 @@ struct ContentView: View {
                         .frame(width: 92, alignment: .trailing)
                 }
                 ForEach(rows, id: \.self) { name in
-                    HStack(spacing: 6) {
-                        // small dot; click → system color panel (wheel / RGB / hex)
-                        ColorDot(color: color(name), size: 7) { ns in
-                            setColor(name, hexOfNS(ns))
-                        }
-                        .frame(width: 16, height: 16)
-                        .help("点击修改颜色（色轮 / RGB / 十六进制）")
-                        Text(name)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .frame(width: 108, alignment: .leading)
-                        Spacer()
-                        Text(human(value(dp, name)))
-                            .frame(width: 84, alignment: .trailing)
-                            .foregroundStyle(.primary)
-                        Text(human(windowTotals[name] ?? 0))
-                            .frame(width: 92, alignment: .trailing)
-                    }
-                    .font(.caption2)
-                    .monospacedDigit()
-                    .foregroundStyle(name == "总量" ? .primary : .secondary)
+                    seriesRow(name, dp: dp)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -492,6 +518,40 @@ struct ContentView: View {
         .frame(height: height)
         .scrollIndicators(.visible)
         .scrollBounceBehavior(.basedOnSize))
+    }
+
+    // one series row, extracted so the modifier chain stays type-checkable
+    func seriesRow(_ name: String, dp: DayPoint) -> some View {
+        HStack(spacing: 6) {
+            // small dot; click → system color panel (wheel / RGB / hex)
+            ColorDot(color: color(name), size: 7) { ns in
+                setColor(name, hexOfNS(ns))
+            }
+            .frame(width: 16, height: 16)
+            .help("点击修改颜色（色轮 / RGB / 十六进制）")
+            Text(name)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(width: 108, alignment: .leading)
+            Spacer()
+            Text(human(value(dp, name)))
+                .frame(width: 84, alignment: .trailing)
+                .foregroundStyle(.primary)
+            Text(human(windowTotals[name] ?? 0))
+                .frame(width: 92, alignment: .trailing)
+        }
+        .font(.caption2)
+        .monospacedDigit()
+        .foregroundStyle(name == "总量" ? .primary : .secondary)
+        .opacity(dragged == name ? 0.4 : 1)
+        .onDrag {
+            dragged = name
+            return NSItemProvider(object: name as NSString)
+        }
+        .onDrop(of: [.text], delegate: SeriesDropDelegate(item: name, dragged: $dragged, move: { d, t in
+            moveDragged(d, before: t)
+        }))
+        .help("拖动调整顺序；色块修改颜色")
     }
 
     var chart: some View {
