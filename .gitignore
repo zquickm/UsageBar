@@ -2,3 +2,5 @@
 *.app
 .DS_Store
 .build/entitlements/
+UsageBar-v*.zip
+UsageBar-v*.dmg
