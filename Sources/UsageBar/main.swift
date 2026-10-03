@@ -609,6 +609,14 @@ struct ContentView: View {
 
     var chart: some View {
         Chart {
+            // per-day dashed gridlines under the data, same dash rhythm as
+            // the 总量 line. Keyed by offset — a second ForEach keyed by
+            // \.element.id collides with the hover-rule ForEach and gets culled.
+            ForEach(Array(store.points.enumerated()), id: \.offset) { idx, _ in
+                RuleMark(x: .value("网格", idx))
+                    .foregroundStyle(.secondary.opacity(0.35))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            }
             ForEach(series, id: \.self) { name in
                 ForEach(Array(store.points.enumerated()), id: \.element.id) { idx, p in
                     LineMark(x: .value("日期", idx), y: .value("token", value(p, name)))
@@ -621,8 +629,11 @@ struct ContentView: View {
             }
             ForEach(Array(store.points.enumerated()), id: \.element.id) { idx, p in
                 if selected?.date == p.date {
+                    // hover indicator: solid and brighter so it reads above
+                    // the dashed per-day gridlines
                     RuleMark(x: .value("日期", idx))
-                        .foregroundStyle(.secondary.opacity(0.25))
+                        .foregroundStyle(.primary.opacity(0.35))
+                        .lineStyle(StrokeStyle(lineWidth: 1.5))
                 }
             }
         }
