@@ -41,7 +41,9 @@ enum LoginItem {
 }
 
 // UsageBar — menu bar token display. Click ⚡ for a popover with a 7-day
-// smoothed line chart fed by `~/.local/bin/usage --chart 7`.
+// smoothed line chart fed by `~/.local/bin/usage 90 --chart` (90-day fetch so
+// the model dropdown also lists models outside the 7-day chart window; the
+// chart itself slices the last 7 days).
 // 总量 only by default; every other agent/model appears exclusively when
 // checked in the dropdown. The list mirrors the chart selection exactly.
 
@@ -61,6 +63,7 @@ final class Store: ObservableObject {
     @Published var title = "⚡…"
     @Published var total = 0
     @Published var points: [DayPoint] = []
+    @Published var knownModels: Set<String> = []  // whole fetch window
 }
 
 func human(_ n: Int) -> String {
@@ -89,8 +92,9 @@ func runJSON() -> Payload? {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/bin/zsh")
     // launchd/login-window environments carry the bare system PATH; ccusage
-    // lives in homebrew, so prepend the usual bins or `usage` dies at login
-    p.arguments = ["-c", "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; ~/.local/bin/usage --chart 7"]
+    // lives in homebrew, so prepend the usual bins or `usage` dies at login.
+    // 90-day fetch: wider window only for model discovery, chart slices last 7
+    p.arguments = ["-c", "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; ~/.local/bin/usage 90 --chart"]
     let pipe = Pipe()
     p.standardOutput = pipe
     p.standardError = Pipe()
@@ -260,9 +264,15 @@ struct ContentView: View {
     var xLabels: [String] { store.points.map { Self.cnDate($0.date) } }
 
     var discovered: Set<String> {
-        var names = Set(store.points.flatMap { mode == .agent ? $0.agents.keys : $0.models.keys })
+        if mode == .model {
+            // full fetch window so unused models still show in the dropdown
+            var names = store.knownModels
+            names.insert("总量")
+            return names
+        }
+        var names = Set(store.points.flatMap { $0.agents.keys })
         names.insert("总量")
-        if mode == .agent { names.formUnion(["zcode", "codex", "dsh"]) }
+        names.formUnion(["zcode", "codex", "dsh"])
         return names
     }
 
@@ -642,7 +652,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 busy = false
                 guard let payload else { item.button?.title = "⚡n/a"; return }
                 store.total = payload.total
-                store.points = payload.days
+                store.points = Array(payload.days.suffix(7))  // chart window
+                store.knownModels = Set(payload.days.flatMap { $0.models.keys })
                 store.title = "⚡" + human(payload.total)
                 item.button?.title = store.title
                 NSLog("UsageBar: title=%@ points=%d", store.title, store.points.count)
