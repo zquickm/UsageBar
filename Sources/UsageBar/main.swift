@@ -116,6 +116,12 @@ let agentOrder = ["总量", "zcode", "codex", "dsh"]
 let agentColor: [String: Color] = ["zcode": .blue, "codex": .purple, "dsh": .orange]
 let modelOrderKnown = ["总量", "GLM-5.3-Flash", "GLM-5.3", "deepseek-flash"]
 let supportedSilentAgents = ["claude", "gemini", "cursor", "grok", "droid", "opencode", "kilo", "qwen", "goose", "copilot"]
+// 套餐/供应商的模型家族；已在 90 天数据里出现过的会自动进入可勾选列表，
+// 这里只显示从未用过的（灰色）。新模型上线后往这里加名字即可。
+let supportedSilentModels = [
+    "GLM-5.3", "GLM-5.3-Flash", "GLM-5.3-Air", "glm-5.3",
+    "deepseek-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner",
+]
 
 func hexOfNS(_ c: NSColor) -> String {
     let srgb = c.usingColorSpace(.sRGB) ?? c
@@ -391,12 +397,11 @@ struct ContentView: View {
                     ))
                 }
             }
-            if mode == .agent {
-                let silent = supportedSilentAgents.filter { !discovered.contains($0) }
-                if !silent.isEmpty {
-                    Section("支持、近7天无数据") {
-                        ForEach(silent, id: \.self) { Text($0) }
-                    }
+            let silent = (mode == .agent ? supportedSilentAgents : supportedSilentModels)
+                .filter { !discovered.contains($0) }
+            if !silent.isEmpty {
+                Section(mode == .agent ? "支持、近7天无数据" : "支持、无用量（可随时勾选）") {
+                    ForEach(silent, id: \.self) { Text($0).foregroundStyle(.secondary) }
                 }
             }
             Button("恢复默认（仅显示总量）") { setVisible([]) }
