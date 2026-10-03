@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""usage [days] [--bar] [--chart] — daily AI CLI token report.
+One aggregate ccusage call (--by-agent) covers every CLI ccusage supports;
+dsh from its own ledger."""
+import json
+import subprocess
+import sys
+from datetime import date, timedelta
+from pathlib import Path
+
+ARGS = sys.argv[1:]
+BAR = "--bar" in ARGS
+CHART = "--chart" in ARGS
+DAYS = int(next((a for a in ARGS if not a.startswith("-")), 7))
+START = (date.today() - timedelta(days=DAYS - 1)).isoformat()
+DSH_LEDGER = Path.home() / ".dsh" / ".dshw-usage.json"
+KNOWN_AGENTS = ("zcode", "codex", "dsh")
+
+
+def human(n):
+    if n >= 1e8:
+        return f"{n / 1e8:.2f}亿"
+    if n >= 1e4:
+        return f"{n / 1e4:.1f}万"
+    return str(int(n))
+
+
+def _run(args):
+    return subprocess.run(args, capture_output=True, text=True, timeout=120)
+
+
+def cli_rows():
+    """{date: {tokens, cost, by_agent, by_model}}.
+    One aggregate ccusage call: --by-agent carries per-tool rows for every CLI
+    ccusage detects (no local whitelist to maintain); per-model numbers come
+    from the same rows' modelBreakdowns."""
+    out = _run(["ccusage", "daily", "--since", START, "--offline", "--json", "--by-agent"])
+    if out.returncode != 0:
+        return None, out.stderr.strip() or "ccusage failed"
+    try:
+        data = json.loads(out.stdout)
+    except json.JSONDecodeError:
+        return None, "bad json from ccusage"
+    rows = {}
+    for d in data.get("daily", []):
+        k = d.get("period") or d.get("date")
+        if not k:
+            continue
+        r = rows.setdefault(k, {"tokens": 0, "cost": 0.0, "by_agent": {}, "by_model": {}})
+        r["tokens"] += d.get("totalTokens", 0)
+        r["cost"] += d.get("totalCost") or d.get("costUSD") or 0
+        for a in d.get("agents", []):
+            name = a.get("agent") or "?"
+            r["by_agent"][name] = r["by_agent"].get(name, 0) + a.get("totalTokens", 0)
+            for m in a.get("modelBreakdowns", []):
+                mt = (m.get("inputTokens", 0) + m.get("outputTokens", 0)
+                      + m.get("cacheCreationTokens", 0) + m.get("cacheReadTokens", 0))
+                r["by_model"][m.get("modelName", "?")] = r["by_model"].get(m.get("modelName", "?"), 0) + mt
+    return rows, None
+
+
+def dsh_rows():
+    if not DSH_LEDGER.exists():
+        return {}, {}, {}
+    data = json.loads(DSH_LEDGER.read_text())
+    tokens, models = {}, {}
+    for e in data.get("events", []):
+        day, m = e["day"], e.get("model", "deepseek")
+        tokens[day] = tokens.get(day, 0) + e["tokens"]
+        models.setdefault(day, {})
+        models[day][m] = models[day].get(m, 0) + e["tokens"]
+    # accounting books are the authoritative CNY cost (units of 1e-8)
+    cost = {}
+    for book in data.get("accounting", {}).get("books", {}).values():
+        for day, rec in book.get("days", {}).items():
+            cost[day] = cost.get(day, 0) + rec["debitUnits"] / 1e8
+    return tokens, cost, models
+
+
+def fmt(n):
+    return f"{n:,}"
+
+
+cc, err = cli_rows()
+if cc is None:
+    if CHART:
+        print(json.dumps({"days": [], "total": 0}))
+    else:
+        print("⚡n/a\n---\n" + err)
+    sys.exit(0)
+
+dsh_tok, dsh_cost, dsh_model = dsh_rows()
+dsh_tok = {d: v for d, v in dsh_tok.items() if d >= START}
+dsh_cost = {d: v for d, v in dsh_cost.items() if d >= START}
+dsh_model = {d: v for d, v in dsh_model.items() if d >= START}
+days = sorted(set(cc) | set(dsh_tok) | set(dsh_cost))
+today = date.today().isoformat()
+
+if CHART:
+    out_days = []
+    cur = date.fromisoformat(START)
+    while cur.isoformat() <= today:
+        k = cur.isoformat()
+        ag = dict(cc.get(k, {}).get("by_agent", {}))
+        ag["dsh"] = ag.get("dsh", 0) + dsh_tok.get(k, 0)
+        ordered = {a: ag.get(a, 0) for a in KNOWN_AGENTS}
+        for a in sorted(set(ag) - set(KNOWN_AGENTS)):
+            ordered[a] = ag[a]
+        md = dict(cc.get(k, {}).get("by_model", {}))
+        for m, v in dsh_model.get(k, {}).items():
+            md[m] = md.get(m, 0) + v
+        out_days.append({"date": k, "agents": ordered, "models": md})
+        cur += timedelta(days=1)
+    total = sum(out_days[-1]["agents"].values()) if out_days else 0
+    print(json.dumps({"days": out_days, "total": total}))
+    sys.exit(0)
+
+if BAR:
+    dsh_today = dsh_tok.get(today, 0)
+    total = (cc[today]["tokens"] if today in cc else 0) + dsh_today
+    per = dict(cc[today]["by_agent"]) if today in cc else {}
+    per["dsh"] = per.get("dsh", 0) + dsh_today
+    for known in KNOWN_AGENTS:
+        per.setdefault(known, 0)
+    print(f"⚡{human(total)}")
+    print("---")
+    print(f"今日 token: {fmt(total)}")
+    for a, t in sorted(per.items(), key=lambda kv: (-kv[1], kv[0])):
+        print(f"{a}: {human(t)} ({fmt(t)})")
+    wk = sum(v["tokens"] for v in cc.values()) + sum(dsh_tok.values())
+    print(f"近{DAYS}天合计: {human(wk)} tok")
+    sys.exit(0)
+
+hdr = f"{'Date':<12}{'CLI/Agent tokens':>18}{'CLI cost':>10}{'dsh tokens':>16}{'dsh cost':>11}{'Day total':>17}"
+print(hdr)
+print("-" * len(hdr))
+tt = tc = dt = dc = 0
+sources = set()
+for day in days:
+    row = cc.get(day, {"tokens": 0, "cost": 0.0, "by_agent": {}})
+    ct, ccost = row["tokens"], row["cost"]
+    dtok, dcost = dsh_tok.get(day, 0), dsh_cost.get(day, 0)
+    tt += ct; tc += ccost; dt += dtok; dc += dcost
+    sources |= set(row["by_agent"])
+    print(f"{day:<12}{fmt(ct):>18}{'$' + format(ccost, '.2f'):>10}{fmt(dtok):>16}{'¥' + format(dcost, '.2f'):>11}{fmt(ct + dtok):>17}")
+print("-" * len(hdr))
+print(f"{'Total':<12}{fmt(tt):>18}{'$' + format(tc, '.2f'):>10}{fmt(dt):>16}{'¥' + format(dc, '.2f'):>11}{fmt(tt + dt):>17}")
+print("\nsources: " + (", ".join(sorted(sources)) or "-") if days else "no usage found")
+print("note: CLI tokens via ccusage reading each tool's own records; GLM cost may be $0 (missing pricing)")
