@@ -42,12 +42,13 @@ enum LoginItem {
 }
 
 // UsageBar — menu bar token display. Click ⚡ for a popover with a 7-day
-// smoothed line chart fed by `~/.local/bin/usage 3650 --chart` (full-history
+// smoothed line chart fed by `ccusage daily --json --by-agent` (full-history
 // fetch so model discovery follows everything ccusage can find; the chart
-// itself slices the last 7 days). The 工具 dropdown's "支持、无数据" section is
-// parsed live from `ccusage --help`, so it tracks the installed ccusage.
-// 总量 only by default; every other agent/model appears exclusively when
-// checked in the dropdown. The list mirrors the chart selection exactly.
+// itself slices the last 7 days). If ccusage is missing, a first-run banner
+// offers a one-click install (brew/npm). The 工具 dropdown's "支持、无数据"
+// section is parsed live from `ccusage --help`, so it tracks the installed
+// ccusage. 总量 only by default; every other agent/model appears exclusively
+// when checked in the dropdown. The list mirrors the chart selection exactly.
 
 struct DayPoint: Codable, Identifiable {
     let date: String
@@ -67,6 +68,12 @@ final class Store: ObservableObject {
     @Published var points: [DayPoint] = []
     @Published var knownModels: Set<String> = []  // whole fetch window
     @Published var supportedAgents: [String] = []  // parsed from ccusage --help
+    // data-engine (ccusage) setup state for the first-run banner
+    @Published var engineMissing = false
+    @Published var engineInstalling = false
+    @Published var engineError: String?
+    @Published var hasBrew = false
+    @Published var hasNpm = false
 }
 
 func human(_ n: Int) -> String {
@@ -91,38 +98,118 @@ extension Color {
     }
 }
 
-func runJSON() -> Payload? {
+let PATHFIX = "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; "
+
+// run a shell snippet with the usual bins prepended (launchd/login-window
+// environments carry a bare system PATH; ccusage lives in homebrew)
+func shell(_ script: String) -> (code: Int32, out: String, err: String) {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-    // launchd/login-window environments carry the bare system PATH; ccusage
-    // lives in homebrew, so prepend the usual bins or `usage` dies at login.
-    // Full-history fetch: chart slices the last 7, discovery covers everything
-    p.arguments = ["-c", "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; ~/.local/bin/usage 3650 --chart"]
-    let pipe = Pipe()
-    p.standardOutput = pipe
-    p.standardError = Pipe()
-    do { try p.run() } catch { return nil }
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    p.arguments = ["-c", PATHFIX + script]
+    let outPipe = Pipe(), errPipe = Pipe()
+    p.standardOutput = outPipe
+    p.standardError = errPipe
+    do { try p.run() } catch { return (-1, "", "\(error)") }
+    let out = outPipe.fileHandleForReading.readDataToEndOfFile()
+    let err = errPipe.fileHandleForReading.readDataToEndOfFile()
     p.waitUntilExit()
-    guard p.terminationStatus == 0 else { return nil }
-    return try? JSONDecoder().decode(Payload.self, from: data)
+    return (p.terminationStatus,
+            String(data: out, encoding: .utf8) ?? "",
+            String(data: err, encoding: .utf8) ?? "")
 }
+
+// ccusage raw daily JSON (subset we consume)
+struct CCModelBreakdown: Decodable {
+    let modelName: String?
+    let inputTokens: Int?
+    let outputTokens: Int?
+    let cacheCreationTokens: Int?
+    let cacheReadTokens: Int?
+}
+struct CCAgent: Decodable {
+    let agent: String?
+    let totalTokens: Int?
+    let modelBreakdowns: [CCModelBreakdown]?
+}
+struct CCDay: Decodable {
+    let date: String?
+    let period: String?
+    let agents: [CCAgent]?
+}
+struct CCRoot: Decodable { let daily: [CCDay]? }
+
+// optional deepseek ledger, merged the same way the old `usage` glue did
+struct DshLedger: Decodable {
+    struct Event: Decodable { let day: String; let model: String?; let tokens: Int }
+    let events: [Event]?
+}
+
+// was: `~/.local/bin/usage 3650 --chart` (python glue). The app now calls
+// ccusage directly and aggregates here — one less installed piece. Full
+// window: chart slices the last 7, model discovery covers everything.
+func runJSON() -> Payload? {
+    if ProcessInfo.processInfo.environment["USAGEBAR_FAKE_NO_ENGINE"] == "1" { return nil }
+    let df = DateFormatter()
+    df.dateFormat = "yyyy-MM-dd"
+    df.locale = Locale(identifier: "en_US_POSIX")
+    let cal = Calendar.current
+    let today = cal.startOfDay(for: Date())
+    let start = cal.date(byAdding: .day, value: -3649, to: today)!
+    let r = shell("ccusage daily --since \(df.string(from: start)) --offline --json --by-agent")
+    guard r.code == 0,
+          let root = try? JSONDecoder().decode(CCRoot.self, from: Data(r.out.utf8)) else { return nil }
+
+    var agentsByDay: [String: [String: Int]] = [:]
+    var modelsByDay: [String: [String: Int]] = [:]
+    for d in root.daily ?? [] {
+        guard let k = d.period ?? d.date else { continue }
+        var ag = agentsByDay[k] ?? [:]
+        var md = modelsByDay[k] ?? [:]
+        for a in d.agents ?? [] {
+            ag[a.agent ?? "?", default: 0] += a.totalTokens ?? 0
+            for m in a.modelBreakdowns ?? [] {
+                let mt = (m.inputTokens ?? 0) + (m.outputTokens ?? 0)
+                    + (m.cacheCreationTokens ?? 0) + (m.cacheReadTokens ?? 0)
+                md[m.modelName ?? "?", default: 0] += mt
+            }
+        }
+        agentsByDay[k] = ag
+        modelsByDay[k] = md
+    }
+    if let home = ProcessInfo.processInfo.environment["HOME"],
+       let data = try? Data(contentsOf: URL(fileURLWithPath: home + "/.dsh/.dshw-usage.json")),
+       let ledger = try? JSONDecoder().decode(DshLedger.self, from: data) {
+        let since = df.string(from: start)
+        for e in ledger.events ?? [] where e.day >= since {
+            var ag = agentsByDay[e.day] ?? [:]
+            ag["dsh", default: 0] += e.tokens
+            agentsByDay[e.day] = ag
+            var md = modelsByDay[e.day] ?? [:]
+            md[e.model ?? "deepseek", default: 0] += e.tokens
+            modelsByDay[e.day] = md
+        }
+    }
+
+    var days: [DayPoint] = []
+    var cur = start
+    while cur <= today {
+        let k = df.string(from: cur)
+        days.append(DayPoint(date: k, agents: agentsByDay[k] ?? [:], models: modelsByDay[k] ?? [:]))
+        cur = cal.date(byAdding: .day, value: 1, to: cur)!
+    }
+    let total = days.last.map { $0.agents.values.reduce(0, +) } ?? 0
+    return Payload(days: days, total: total)
+}
+
+func ccusageInstalled() -> Bool { shell("command -v ccusage").code == 0 }
 
 // ccusage --help enumerates every agent CLI it can parse; each such subcommand
 // line ends with "usage commands". Parsed live so the 支持、无数据 section
 // follows the installed ccusage version instead of a hardcoded list.
 func parseCCusageAgents() -> [String] {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-    p.arguments = ["-c", "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; ccusage --help"]
-    let pipe = Pipe()
-    p.standardOutput = pipe
-    p.standardError = Pipe()
-    do { try p.run() } catch { return [] }
-    let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-    p.waitUntilExit()
-    guard p.terminationStatus == 0 else { return [] }
-    return out.split(separator: "\n")
+    let r = shell("ccusage --help")
+    guard r.code == 0 else { return [] }
+    return r.out.split(separator: "\n")
         .filter { $0.contains("usage commands") }
         .compactMap { $0.split(whereSeparator: \.isWhitespace).first.map(String.init) }
 }
@@ -281,6 +368,7 @@ struct ContentView: View {
     var onDaily: () -> Void
     var onRefresh: () -> Void
     var onQuit: () -> Void
+    var onInstall: (String) -> Void
     @State private var selected: DayPoint?
     @State private var mode: ChartMode
     @State private var autostart = false
@@ -292,11 +380,13 @@ struct ContentView: View {
     @State private var dragged: String?
     @State private var hovered: String?
 
-    init(store: Store, onDaily: @escaping () -> Void, onRefresh: @escaping () -> Void, onQuit: @escaping () -> Void) {
+    init(store: Store, onDaily: @escaping () -> Void, onRefresh: @escaping () -> Void,
+         onQuit: @escaping () -> Void, onInstall: @escaping (String) -> Void) {
         self.store = store
         self.onDaily = onDaily
         self.onRefresh = onRefresh
         self.onQuit = onQuit
+        self.onInstall = onInstall
         _mode = State(initialValue: ProcessInfo.processInfo.environment["USAGEBAR_MODE"] == "model" ? .model : .agent)
     }
 
@@ -395,17 +485,21 @@ struct ContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Picker("模式", selection: $mode) {
-                    ForEach(ChartMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            if store.engineMissing {
+                engineSetup
+            } else {
+                HStack(spacing: 8) {
+                    Picker("模式", selection: $mode) {
+                        ForEach(ChartMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .handCursor()
+                    seriesMenu
                 }
-                .pickerStyle(.segmented)
-                .handCursor()
-                seriesMenu
+                chart
+                Divider()
+                valueList
             }
-            chart
-            Divider()
-            valueList
             HStack {
                 Button("终端日报", action: onDaily).handCursor()
                 Spacer()
@@ -420,6 +514,46 @@ struct ContentView: View {
         .padding(14)
         .frame(width: 380)
         .onAppear { LoginItem.isEnabled { autostart = $0 } }
+    }
+
+    // first-run setup: ccusage missing → offer a one-click install so a fresh
+    // download needs no terminal at all
+    var engineSetup: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("数据引擎 ccusage 未安装", systemImage: "exclamationmark.triangle")
+                .font(.headline)
+            Text("它负责读取各 AI CLI 的本地日志（完全本地，不联网上传）。装好后菜单栏即显示用量。")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            if store.engineInstalling {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("安装中…首次会连 Node 一起装，可能需要几分钟")
+                        .font(.callout)
+                }
+            } else {
+                HStack(spacing: 8) {
+                    if store.hasBrew {
+                        Button("用 Homebrew 安装") { onInstall("brew") }.handCursor()
+                    }
+                    if store.hasNpm {
+                        Button("用 npm 安装") { onInstall("npm") }.handCursor()
+                    }
+                }
+                if let e = store.engineError {
+                    Text(e)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .lineLimit(3)
+                }
+                Text("也可手动执行：brew install ccusage（或 npm i -g ccusage）")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
     }
 
     var seriesMenu: some View {
@@ -710,7 +844,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 store: store,
                 onDaily: { self.openDaily() },
                 onRefresh: { self.refresh() },
-                onQuit: { NSApp.terminate(nil) }
+                onQuit: { NSApp.terminate(nil) },
+                onInstall: { self.installEngine($0) }
             ))
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
             if e.keyCode == 53 && self.popover.isShown {  // Esc
@@ -788,8 +923,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.performClose(nil)
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        p.arguments = ["-e", "tell application \"Terminal\" to do script \"usage 7\""]
+        // `usage` glue CLI is optional now; fall back to plain ccusage
+        p.arguments = ["-e", "tell application \"Terminal\" to do script \"command -v usage >/dev/null && usage 7 || ccusage daily\""]
         try? p.run()
+    }
+
+    // detect which package manager can install the data engine
+    func detectInstallers() {
+        DispatchQueue.global(qos: .utility).async { [self] in
+            let brew = shell("command -v brew").code == 0
+            let npm = shell("command -v npm").code == 0
+            DispatchQueue.main.async { [self] in
+                store.hasBrew = brew
+                store.hasNpm = npm
+            }
+        }
+    }
+
+    func installEngine(_ tool: String) {
+        guard !store.engineInstalling else { return }
+        store.engineInstalling = true
+        store.engineError = nil
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            let r = shell(tool == "brew" ? "brew install ccusage" : "npm install -g ccusage")
+            DispatchQueue.main.async { [self] in
+                store.engineInstalling = false
+                if r.code == 0 {
+                    store.engineMissing = false
+                    refresh()
+                } else {
+                    store.engineError = r.err.split(separator: "\n").suffix(3).joined(separator: "\n")
+                }
+            }
+        }
     }
 
     func refresh() {
@@ -797,11 +963,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         busy = true
         let needAgents = store.supportedAgents.isEmpty
         DispatchQueue.global(qos: .utility).async { [self] in
+            // debug/verification hook: pretend the engine is missing
+            if ProcessInfo.processInfo.environment["USAGEBAR_FAKE_NO_ENGINE"] == "1" {
+                DispatchQueue.main.async { [self] in
+                    busy = false
+                    item.button?.title = "n/a"
+                    store.engineMissing = true
+                    detectInstallers()
+                }
+                return
+            }
             let payload = runJSON()
             let agents = needAgents ? parseCCusageAgents() : []
             DispatchQueue.main.async { [self] in
                 busy = false
-                guard let payload else { item.button?.title = "n/a"; return }
+                guard let payload else {
+                    item.button?.title = "n/a"
+                    store.engineMissing = !ccusageInstalled()
+                    if store.engineMissing { detectInstallers() }
+                    return
+                }
+                store.engineMissing = false
+                store.engineError = nil
                 store.total = payload.total
                 store.points = Array(payload.days.suffix(7))  // chart window
                 store.knownModels = Set(payload.days.flatMap { $0.models.keys })

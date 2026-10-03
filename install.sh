@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# UsageBar installer — sets up the data helper (`~/.local/bin/usage`) and its
-# only dependency, ccusage. Run from the repo root or anywhere inside it.
+# UsageBar optional terminal extra — installs the `usage` CLI (daily report in
+# Terminal) and its dependency ccusage. The app itself does NOT need this:
+# it bundles its own aggregation and offers a one-click ccusage install.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)/bin/usage"
@@ -21,4 +22,4 @@ if ! command -v ccusage >/dev/null 2>&1; then
 fi
 echo "✓ ccusage $(ccusage --version) 就绪"
 echo
-echo "完成。打开 UsageBar.app，菜单栏闪电图标几秒后即显示今日 token 用量。"
+echo "完成。终端里试试：usage（近 7 天明细表）、usage 30、usage --bar。"
