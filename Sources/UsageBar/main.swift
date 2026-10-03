@@ -61,7 +61,7 @@ struct Payload: Codable {
 }
 
 final class Store: ObservableObject {
-    @Published var title = "⚡…"
+    @Published var title = "…"
     @Published var total = 0
     @Published var points: [DayPoint] = []
     @Published var knownModels: Set<String> = []  // whole fetch window
@@ -571,7 +571,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ud.set(true, forKey: "usagebar.autostart.tried")
             LoginItem.isEnabled { on in if !on { LoginItem.set(true) } }
         }
-        item.button?.title = "⚡…"
+        // monochrome template bolt: white on dark menu bar, black on light
+        if let bolt = NSImage(systemSymbolName: "bolt.fill", accessibilityDescription: "用量") {
+            bolt.isTemplate = true
+            item.button?.image = bolt
+        }
+        item.button?.title = "…"
         item.button?.action = #selector(togglePopover)
         item.button?.target = self
         // native click-outside-to-close; temporarily manual while color panel is open
@@ -672,12 +677,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let agents = needAgents ? parseCCusageAgents() : []
             DispatchQueue.main.async { [self] in
                 busy = false
-                guard let payload else { item.button?.title = "⚡n/a"; return }
+                guard let payload else { item.button?.title = "n/a"; return }
                 store.total = payload.total
                 store.points = Array(payload.days.suffix(7))  // chart window
                 store.knownModels = Set(payload.days.flatMap { $0.models.keys })
                 if !agents.isEmpty { store.supportedAgents = agents }
-                store.title = "⚡" + human(payload.total)
+                store.title = human(payload.total)
                 item.button?.title = store.title
                 NSLog("UsageBar: title=%@ points=%d", store.title, store.points.count)
             }
