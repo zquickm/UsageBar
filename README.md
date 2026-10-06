@@ -1,8 +1,10 @@
 # UsageBar ⚡
 
-macOS 菜单栏的 AI CLI token 用量表：常驻菜单栏显示今日用量，点开看 7 天曲线和精确数字，可按工具或按模型拆分。数据 100% 本地读取——它只是替你汇总各 AI CLI 自己写好的会话日志，不需要 API key，不上传任何数据。
+macOS 菜单栏 / Windows 任务栏的 AI CLI token 用量表：常驻显示今日用量，点开看 7 天曲线和精确数字，可按工具或按模型拆分。数据 100% 本地读取——它只是替你汇总各 AI CLI 自己写好的会话日志，不需要 API key，不上传任何数据。
 
-A macOS menu bar app that tracks your AI CLI token usage (Claude Code, Codex, ZCode, OpenCode, Gemini CLI, Kimi, Qwen … — everything [ccusage](https://github.com/ccusage/ccusage) supports). 7-day chart + exact numbers, fully local.
+A menu bar (macOS) / taskbar (Windows) app that tracks your AI CLI token usage (Claude Code, Codex, ZCode, OpenCode, Gemini CLI, Kimi, Qwen … — everything [ccusage](https://github.com/ccusage/ccusage) supports). 7-day chart + exact numbers, fully local.
+
+**Windows 用户直接看 [Windows 版](#windows-版) 一节。**
 
 ![screenshot](docs/screenshot.png)
 
@@ -16,6 +18,26 @@ A macOS menu bar app that tracks your AI CLI token usage (Claude Code, Codex, ZC
 - **终端日报**：底部「终端日报」按钮在 Terminal 打开用量报表；可选安装的 `usage` 命令还能在终端独立使用
 - **开机自启**：面板内开关（登录项方式）
 - **检查更新**：一个按钮查两处——引擎 ccusage 新版（npm registry，一键升级，自动跟随 brew/npm）和 UsageBar 新版（GitHub Release，一键跳转下载）；仅点击时联网
+
+## Windows 版
+
+同一份数据引擎（ccusage），Windows 上以任务栏常驻的形式呈现。Windows 托盘只能放方形小图标、放不下文字数字，所以采用 TrafficMonitor 同款方案：把一个无边框小窗**嵌入任务栏托盘区左侧**，常驻显示 `⚡今日用量`，点击弹出 7 天报表。托盘图标作为备用入口（右键菜单），任务栏嵌入不可用时自动回退为纯托盘模式。
+
+- **任务栏小窗**：`⚡1669.3万` 常驻显示今日用量，每 60 秒自动刷新；Explorer 重启后自动重新嵌入，位置自适应 DPI
+- **弹出面板**（点击小窗或托盘图标）：按工具/按模型切换、系列勾选、7 天平滑曲线、逐日用量列表、颜色自定义——与 macOS 版面板一致；Esc 或点击外部关闭
+- **托盘右键菜单**：显示/隐藏任务栏数字、终端日报、立即刷新、检查更新、开机自启、退出
+- **检查更新**：一个按钮查两处——ccusage 新版（npm registry，一键升级）与 UsageBar 本体（GitHub Release）
+- **数据 100% 本地**：`ccusage daily --offline --json --by-agent`，不联网上传
+- 首次启动自动添加开机自启（HKCU Run，可随时在菜单里关闭），检测到 ccusage 未安装时面板引导一键 `npm i -g ccusage`
+
+**构建（零依赖）**：Windows 10/11 自带 C# 编译器（csc.exe），不需要装任何 SDK：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File windows\build.ps1          # 构建
+powershell -ExecutionPolicy Bypass -File windows\build.ps1 -Run     # 构建并运行
+```
+
+产物：`windows\dist\UsageBar.exe`（单文件约 100 KB；Win10/11 直接运行，.NET Framework 4.8 系统预装）。源码就一个文件：`windows/UsageBar/Program.cs`（C# 5 + WinForms，与 mac 版"核心一个文件"对称）。数据引擎 ccusage 未装时面板会给出安装引导；没有 npm 时先装 [Node.js LTS](https://nodejs.org/)。
 
 ## 系统要求
 
@@ -97,12 +119,16 @@ usage --bar    # ⚡ 今日摘要块（菜单栏同款格式）
 
 ## 从源码构建
 
+macOS：
+
 ```bash
 APP_NAME=UsageBar BUNDLE_ID=com.cookie.UsageBar MENU_BAR_APP=1 SIGNING_MODE=adhoc \
   ARCHES="arm64 x86_64" ./Scripts/package_app.sh release
 ```
 
 Swift Package（SwiftUI + Charts），核心就一个文件：`Sources/UsageBar/main.swift`。
+
+Windows：见 [Windows 版](#windows-版) 一节，`powershell -File windows\build.ps1` 一条命令，无需 SDK。
 
 ## License
 
