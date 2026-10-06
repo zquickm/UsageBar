@@ -63,7 +63,7 @@ cask 安装时自动剥掉隔离标记，装完直接打开，没有 Gatekeeper 
 
 **方式 B：直接下载**
 
-1. 从 [Releases](../../releases) 下载 **`UsageBar-v*.dmg`**，打开，把 **UsageBar** 拖到右边的 **Applications** 文件夹（窗口里有图示），然后推出磁盘镜像。（Release 里另附 zip，供脚本化安装使用）
+1. 从 [Releases](../../releases) 下载 **`UsageBar-v*.dmg`**，打开，把 **UsageBar** 拖到右边的 **Applications** 文件夹（窗口里有图示），然后推出磁盘镜像。
 2. 首次打开会有一次 Gatekeeper 提示（DMG 安装窗口底部就印着这段指引；应用是 ad-hoc 签名、未公证，属正常，只需一次）：
    - **macOS 15 (Sequoia) 及以上**：双击打开一次，在弹出的提示里选「完成」；然后到 **系统设置 → 隐私与安全性**，往下拉到「安全性」区，点 **「仍要打开」** 并确认。
    - **macOS 14**：右键 → 打开 → 确认。
