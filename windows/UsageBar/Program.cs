@@ -1,4 +1,5 @@
-// UsageBar for Windows — tray + taskbar widget + flyout panel for AI CLI token usage.
+// UsageBar for Windows — system tray app for AI CLI token usage: tray icon +
+// click-to-open flyout panel (Razer Synapse style).
 // Windows counterpart of Sources/UsageBar/main.swift: same data flow (ccusage daily
 // --offline --json --by-agent, 100% local), same views (7-day chart, by-tool /
 // by-model series, colors, order), adapted to Windows conventions:
@@ -138,7 +139,6 @@ namespace UsageBar
         public string Colors = "";               // name=#RRGGBB;...
         public string AgentOrder = "";
         public string ModelOrder = "";
-        public bool ShowTaskbarWidget = true;
         public bool FirstRunDone = false;
 
         static string Path()
@@ -695,25 +695,10 @@ namespace UsageBar
         }
     }
 
-    // MARK: - Win32 interop
+    // MARK: - Win32 interop (only what the message window and tray icon need)
 
     static class Win32
     {
-        [StructLayout(LayoutKind.Sequential)]
-        public struct RECT { public int Left, Top, Right, Bottom; }
-
-        [StructLayout(LayoutKind.Sequential)]
-        public struct PAINTSTRUCT
-        {
-            public IntPtr hdc;
-            public bool fErase;
-            public RECT rcPaint;
-            public bool fRestore;
-            public bool fIncUpdate;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
-            public byte[] rgbReserved;
-        }
-
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         public struct WNDCLASS
         {
@@ -745,128 +730,12 @@ namespace UsageBar
             uint style, int x, int y, int w, int h, IntPtr parent, IntPtr menu, IntPtr inst, IntPtr param);
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-        public static extern IntPtr FindWindowW(string className, string windowName);
-
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-        public static extern IntPtr FindWindowExW(IntPtr parent, IntPtr after, string className, string windowName);
-
-        [DllImport("user32.dll")]
-        public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
-
-        [DllImport("user32.dll")]
-        public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
-
-        [DllImport("user32.dll")]
-        public static extern bool DestroyWindow(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        public static extern bool IsWindow(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        public static extern bool InvalidateRect(IntPtr hWnd, IntPtr rect, bool erase);
-
-        [DllImport("user32.dll")]
-        public static extern IntPtr BeginPaint(IntPtr hWnd, out PAINTSTRUCT ps);
-
-        [DllImport("user32.dll")]
-        public static extern bool EndPaint(IntPtr hWnd, ref PAINTSTRUCT ps);
-
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         public static extern uint RegisterWindowMessageW(string message);
-
-        [DllImport("user32.dll")]
-        public static extern IntPtr GetDC(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        public static extern int ReleaseDC(IntPtr hWnd, IntPtr hdc);
-
-        [DllImport("gdi32.dll")]
-        public static extern uint GetPixel(IntPtr hdc, int x, int y);
-
-        [DllImport("user32.dll")]
-        public static extern IntPtr LoadCursorW(IntPtr inst, IntPtr cursor);
-
-        [DllImport("user32.dll")]
-        public static extern IntPtr SetCursor(IntPtr cursor);
 
         [DllImport("user32.dll")]
         public static extern bool DestroyIcon(IntPtr hIcon);
 
-        [DllImport("user32.dll", SetLastError = true)]
-        public static extern bool SetParent(IntPtr child, IntPtr newParent);
-
-        [DllImport("user32.dll")]
-        public static extern bool ShowWindow(IntPtr hWnd, int cmd);
-
-        [DllImport("user32.dll")]
-        public static extern bool MoveWindow(IntPtr hWnd, int x, int y, int w, int h, bool repaint);
-
-        [DllImport("gdi32.dll")]
-        public static extern IntPtr CreateCompatibleDC(IntPtr dc);
-
-        [DllImport("gdi32.dll")]
-        public static extern bool DeleteDC(IntPtr dc);
-
-        [DllImport("gdi32.dll")]
-        public static extern IntPtr CreateDIBSection(IntPtr dc, ref BITMAPINFOHEADER bmi, uint usage, out IntPtr bits, IntPtr section, uint offset);
-
-        [DllImport("gdi32.dll")]
-        public static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
-
-        [DllImport("gdi32.dll")]
-        public static extern bool DeleteObject(IntPtr obj);
-
-        [DllImport("user32.dll")]
-        public static extern bool UpdateLayeredWindow(IntPtr hWnd, IntPtr dstDc, IntPtr dstPt, ref SIZE size, IntPtr srcDc, ref POINT srcPt, uint colorKey, ref BLENDFUNCTION blend, uint flags);
-
-        [StructLayout(LayoutKind.Sequential)]
-        public struct BITMAPINFOHEADER
-        {
-            public int biSize, biWidth, biHeight;
-            public short biPlanes, biBitCount;
-            public int biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        public struct BLENDFUNCTION
-        {
-            public byte BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        public struct SIZE { public int cx, cy; }
-
-        [StructLayout(LayoutKind.Sequential)]
-        public struct POINT { public int X, Y; }
-
-        public const int GWL_STYLE = -16;
-        public const uint WS_EX_NOACTIVATE = 0x08000000;
-        public const int SW_SHOWNOACTIVATE = 4;
-        public const uint ULW_ALPHA = 0x02;
-
-        [DllImport("user32.dll", SetLastError = true)]
-        public static extern int GetWindowLongW(IntPtr hWnd, int nIndex);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        public static extern int SetWindowLongW(IntPtr hWnd, int nIndex, int newValue);
-
-        [DllImport("user32.dll")]
-        public static extern bool SetLayeredWindowAttributes(IntPtr hWnd, uint colorKey, byte alpha, uint flags);
-
-        public const int GWL_EXSTYLE = -20;
-        public const uint WS_EX_LAYERED = 0x00080000;
-        public const uint LWA_ALPHA = 0x02;
-
         public static readonly IntPtr HWND_MESSAGE = new IntPtr(-3);
-        public const uint WS_CHILD = 0x40000000;
-        public const uint WS_POPUP = 0x80000000;
-        public const uint WS_VISIBLE = 0x10000000;
-        public const uint WS_CLIPSIBLINGS = 0x04000000;
-        public const uint WS_EX_TOOLWINDOW = 0x00000080;
-        public const uint SWP_NOACTIVATE = 0x0010;
-        public const uint SWP_NOZORDER = 0x0004;
-        public const uint SWP_SHOWWINDOW = 0x0040;
-        public static readonly IntPtr IDC_HAND = new IntPtr(32649);
     }
 
     // MARK: - Bolt glyph (drawn, not a font glyph — no missing-character risk)
@@ -913,318 +782,20 @@ namespace UsageBar
         }
     }
 
-    // MARK: - Taskbar widget (embedded next to the tray — the TrafficMonitor pattern;
-    // tray icons are square bitmaps and can't hold text like 12.3万)
-    //
-    // Embedding recipe (from Tray-Usage-Monitor / TrafficMonitor, the two apps that
-    // make this work on Win11): create a top-level layered popup off-screen, rewrite
-    // WS_POPUP → WS_CHILD, SetParent into Shell_TrayWnd, position, and render via
-    // UpdateLayeredWindow (per-pixel alpha, transparent background). A direct
-    // WS_CHILD or an unconverted popup gets covered by the taskbar's XAML content.
-
-    class TaskbarWidget : NativeWindow
-    {
-        const string ClassName = "UsageBarWidget";
-        static bool classRegistered;
-        static uint taskbarCreatedMsg = 0;
-
-        IntPtr hwnd = IntPtr.Zero;
-        IntPtr parent = IntPtr.Zero;
-        bool embedded;
-        int curX, curY, curW, curH;
-        string title = "…";
-        readonly AppContext ctx;
-
-        public TaskbarWidget(AppContext context)
-        {
-            ctx = context;
-            if (taskbarCreatedMsg == 0)
-                taskbarCreatedMsg = Win32.RegisterWindowMessageW("TaskbarCreated");
-        }
-
-        public static uint TaskbarCreatedMsg { get { return taskbarCreatedMsg; } }
-
-        public Rectangle ScreenRect
-        {
-            get
-            {
-                Win32.RECT r;
-                if (hwnd != IntPtr.Zero && Win32.IsWindow(hwnd) && Win32.GetWindowRect(hwnd, out r))
-                    return Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
-                return Rectangle.Empty;
-            }
-        }
-
-        static void EnsureClass()
-        {
-            if (classRegistered) return;
-            Win32.WNDCLASS wc = new Win32.WNDCLASS();
-            wc.lpfnWndProc = Win32.DefProcPtr;
-            wc.hInstance = Marshal.GetHINSTANCE(typeof(Program).Module);
-            wc.hCursor = Win32.LoadCursorW(IntPtr.Zero, Win32.IDC_HAND);
-            wc.hbrBackground = IntPtr.Zero;
-            wc.lpszClassName = ClassName;
-            ushort atom = Win32.RegisterClassW(ref wc);
-            Program.Log("RegisterClassW atom=" + atom + " err=" + Marshal.GetLastWin32Error());
-            classRegistered = true;
-        }
-
-        public void Recheck()
-        {
-            try
-            {
-                bool want = ctx.Settings.ShowTaskbarWidget;
-                IntPtr tb = Win32.FindWindowW("Shell_TrayWnd", null);
-                if (!want || tb == IntPtr.Zero || !Win32.IsWindow(tb))
-                {
-                    DestroySelf();
-                    return;
-                }
-                if (hwnd == IntPtr.Zero || !Win32.IsWindow(hwnd) || parent != tb || !embedded)
-                {
-                    DestroySelf();
-                    Create(tb);
-                    Program.Log("Recheck: created hwnd=" + hwnd + " embedded=" + embedded);
-                }
-                if (embedded) Reposition();
-            }
-            catch (Exception ex)
-            {
-                Program.Log("Recheck exception: " + ex);
-            }
-        }
-
-        void Create(IntPtr taskbar)
-        {
-            EnsureClass();
-            hwnd = Win32.CreateWindowExW(
-                Win32.WS_EX_TOOLWINDOW | Win32.WS_EX_LAYERED | Win32.WS_EX_NOACTIVATE,
-                ClassName, "UsageBar",
-                Win32.WS_POPUP | Win32.WS_VISIBLE,
-                -2000, -2000, 60, 30, IntPtr.Zero, IntPtr.Zero,
-                Marshal.GetHINSTANCE(typeof(Program).Module), IntPtr.Zero);
-            Program.Log("CreateWindowExW hwnd=" + hwnd + " err=" + Marshal.GetLastWin32Error());
-            if (hwnd == IntPtr.Zero) return;
-            AssignHandle(hwnd);
-            parent = taskbar;
-            embedded = Embed(taskbar);
-            Program.Log("Embed result=" + embedded);
-        }
-
-        bool Embed(IntPtr taskbar)
-        {
-            // rewrite the style before SetParent: a WS_POPUP "child" is not picked
-            // up by the taskbar's composition; a real WS_CHILD is
-            int style = Win32.GetWindowLongW(hwnd, Win32.GWL_STYLE);
-            style = (style & ~unchecked((int)Win32.WS_POPUP))
-                  | (unchecked((int)Win32.WS_CHILD) | unchecked((int)Win32.WS_CLIPSIBLINGS));
-            Win32.SetWindowLongW(hwnd, Win32.GWL_STYLE, style);
-            if (!Win32.SetParent(hwnd, taskbar)) return false;
-            Reposition();
-            Win32.ShowWindow(hwnd, Win32.SW_SHOWNOACTIVATE);
-            Paint();
-            return true;
-        }
-
-        void DestroySelf()
-        {
-            embedded = false;
-            if (hwnd != IntPtr.Zero)
-            {
-                bool alive = Win32.IsWindow(hwnd);
-                ReleaseHandle();
-                if (alive) Win32.DestroyWindow(hwnd);
-            }
-            hwnd = IntPtr.Zero;
-            parent = IntPtr.Zero;
-        }
-
-        public void SetTitle(string t)
-        {
-            if (t == null) t = "…";
-            if (t == title) return;
-            title = t;
-            if (embedded)
-            {
-                Reposition();
-                Paint();  // layered windows ignore WM_PAINT — push the new frame
-            }
-        }
-
-        // right-align against the tray notification area, like TrafficMonitor's taskbar window
-        void Reposition()
-        {
-            if (hwnd == IntPtr.Zero || !Win32.IsWindow(hwnd) || parent == IntPtr.Zero) return;
-            Win32.RECT tbRect, notifyRect;
-            if (!Win32.GetWindowRect(parent, out tbRect)) return;
-
-            int tbW = tbRect.Right - tbRect.Left;
-            int tbH = tbRect.Bottom - tbRect.Top;
-            if (tbW <= 0 || tbH <= 0) return;
-
-            int h = Math.Max(tbH - 6, 20);
-            int textW = MeasureTitleWidth(h);
-            int w = Program.Px(4) + (int)(h * 0.52f) + Program.Px(3) + textW + Program.Px(6);
-            if (w < 40) w = 40;
-
-            int xRight;
-            IntPtr notify = Win32.FindWindowExW(parent, IntPtr.Zero, "TrayNotifyWnd", null);
-            if (notify != IntPtr.Zero && Win32.GetWindowRect(notify, out notifyRect))
-                xRight = notifyRect.Left - tbRect.Left - Program.Px(8);
-            else
-                xRight = tbW - Program.Px(12);
-            int x = xRight - w;
-            int y = (tbH - h) / 2;
-
-            if (x != curX || y != curY || w != curW || h != curH)
-            {
-                curX = x; curY = y; curW = w; curH = h;
-                Win32.MoveWindow(hwnd, x, y, w, h, true);
-            }
-        }
-
-        int MeasureTitleWidth(int h)
-        {
-            using (Font font = new Font(Program.AppFontFamily, h * 0.44f, GraphicsUnit.Pixel))
-            using (Graphics g = Graphics.FromHwnd(IntPtr.Zero))
-            {
-                SizeF ts = g.MeasureString(title, font, 0, StringFormat.GenericTypographic);
-                return (int)ts.Width + 2;
-            }
-        }
-
-        // per-pixel alpha via UpdateLayeredWindow: transparent background, the
-        // taskbar shows through — no background-colour sampling needed.
-        // ponytail: GDI+ writes non-premultiplied alpha, so anti-aliased edges can
-        // fringe slightly; upgrade path is manual premultiplication if it shows.
-        void Paint()
-        {
-            if (hwnd == IntPtr.Zero || !Win32.IsWindow(hwnd) || curW <= 0 || curH <= 0) return;
-            int w = curW, h = curH;
-
-            IntPtr sdc = Win32.GetDC(IntPtr.Zero);
-            if (sdc == IntPtr.Zero) return;
-            IntPtr mem = Win32.CreateCompatibleDC(sdc);
-            IntPtr bitmap = IntPtr.Zero, bits = IntPtr.Zero, old = IntPtr.Zero;
-            try
-            {
-                Win32.BITMAPINFOHEADER bmi = new Win32.BITMAPINFOHEADER();
-                bmi.biSize = Marshal.SizeOf(typeof(Win32.BITMAPINFOHEADER));
-                bmi.biWidth = w;
-                bmi.biHeight = -h;  // top-down
-                bmi.biPlanes = 1;
-                bmi.biBitCount = 32;
-                bmi.biCompression = 0;
-                bitmap = Win32.CreateDIBSection(sdc, ref bmi, 0, out bits, IntPtr.Zero, 0);
-                if (bitmap == IntPtr.Zero || bits == IntPtr.Zero) return;
-                old = Win32.SelectObject(mem, bitmap);
-
-                bool light = IsLightMode();
-                Color textColor = light ? Color.FromArgb(40, 40, 45) : Color.White;
-                Color boltFill = light ? Color.FromArgb(235, 150, 0) : Color.FromArgb(255, 199, 0);
-
-                using (Bitmap bmp = new Bitmap(w, h, w * 4, System.Drawing.Imaging.PixelFormat.Format32bppArgb, bits))
-                using (Graphics g = Graphics.FromImage(bmp))
-                {
-                    g.SmoothingMode = SmoothingMode.AntiAlias;
-                    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-                    // alpha=1 (≈0.4% opacity): invisible, but makes the whole rect
-                    // hit-testable — layered windows pass clicks through alpha=0 pixels
-                    g.Clear(Color.FromArgb(1, 0, 0, 0));
-                    float boltSize = h * 0.52f;
-                    float pad = Program.Px(4);
-                    Bolt.Draw(g, new RectangleF(pad, (h - boltSize) / 2f, boltSize, boltSize), boltFill, Color.Empty);
-                    using (Font font = new Font(Program.AppFontFamily, h * 0.44f, GraphicsUnit.Pixel))
-                    {
-                        float tx = pad + boltSize + Program.Px(3);
-                        SizeF ts = g.MeasureString(title, font, 0, StringFormat.GenericTypographic);
-                        float ty = Math.Max(0, (h - ts.Height) / 2f);
-                        using (SolidBrush tb = new SolidBrush(textColor))
-                        {
-                            g.DrawString(title, font, tb, tx, ty, StringFormat.GenericTypographic);
-                        }
-                    }
-                }
-
-                Win32.BLENDFUNCTION blend = new Win32.BLENDFUNCTION();
-                blend.BlendOp = 0;        // AC_SRC_OVER
-                blend.BlendFlags = 0;
-                blend.SourceConstantAlpha = 255;
-                blend.AlphaFormat = 1;    // AC_SRC_ALPHA
-                Win32.SIZE size = new Win32.SIZE();
-                size.cx = w;
-                size.cy = h;
-                Win32.POINT src = new Win32.POINT();
-                src.X = 0;
-                src.Y = 0;
-                Win32.UpdateLayeredWindow(hwnd, sdc, IntPtr.Zero, ref size, mem, ref src, 0, ref blend, Win32.ULW_ALPHA);
-            }
-            finally
-            {
-                if (old != IntPtr.Zero) Win32.SelectObject(mem, old);
-                if (bitmap != IntPtr.Zero) Win32.DeleteObject(bitmap);
-                if (mem != IntPtr.Zero) Win32.DeleteDC(mem);
-                Win32.ReleaseDC(IntPtr.Zero, sdc);
-            }
-        }
-
-        static bool IsLightMode()
-        {
-            // the taskbar follows the system theme
-            try
-            {
-                using (RegistryKey k = Registry.CurrentUser.OpenSubKey(
-                    @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
-                {
-                    if (k != null)
-                    {
-                        object sys = k.GetValue("SystemUsesLightTheme");
-                        if (sys is int) return ((int)sys) != 0;
-                        object apps = k.GetValue("AppsUseLightTheme");
-                        if (apps is int) return ((int)apps) != 0;
-                    }
-                }
-            }
-            catch { }
-            return true;
-        }
-
-        protected override void WndProc(ref Message m)
-        {
-            const uint WM_LBUTTONUP = 0x0202;
-            const uint WM_SETCURSOR = 0x0020;
-
-            if (m.Msg == taskbarCreatedMsg && taskbarCreatedMsg != 0)
-            {
-                ctx.OnTaskbarCreated();
-            }
-            if (m.Msg == (int)WM_LBUTTONUP)
-            {
-                ctx.ToggleFlyout(ScreenRect);
-                m.Result = IntPtr.Zero;
-                return;
-            }
-            if (m.Msg == (int)WM_SETCURSOR)
-            {
-                Win32.SetCursor(Win32.LoadCursorW(IntPtr.Zero, Win32.IDC_HAND));
-                m.Result = (IntPtr)1;
-                return;
-            }
-            base.WndProc(ref m);
-        }
-    }
-
     // MARK: - Message-only window (TaskbarCreated → re-add tray icon after explorer restarts)
 
     class MessageWindow : NativeWindow
     {
         const string ClassName = "UsageBarMsgWin";
         static bool classRegistered;
+        static uint taskbarCreatedMsg;
         readonly AppContext ctx;
 
         public MessageWindow(AppContext context)
         {
             ctx = context;
+            if (taskbarCreatedMsg == 0)
+                taskbarCreatedMsg = Win32.RegisterWindowMessageW("TaskbarCreated");
             if (!classRegistered)
             {
                 Win32.WNDCLASS wc = new Win32.WNDCLASS();
@@ -1241,7 +812,7 @@ namespace UsageBar
 
         protected override void WndProc(ref Message m)
         {
-            if (TaskbarWidget.TaskbarCreatedMsg != 0 && m.Msg == (int)TaskbarWidget.TaskbarCreatedMsg)
+            if (taskbarCreatedMsg != 0 && m.Msg == (int)taskbarCreatedMsg)
             {
                 ctx.OnTaskbarCreated();
             }
@@ -1636,7 +1207,7 @@ namespace UsageBar
 
             chart = new ChartPanel();
             chart.AppCtx = ctx;
-            chart.OnHover = delegate(int idx) { list.DisplayPoint = PointFor(idx); list.Invalidate(); };
+            chart.OnHover = delegate(int idx) { SyncListTo(idx); };
             chart.ColorFor = delegate(string name) { return ViewLogic.ColorFor(ctx.Settings, name, ctx.Settings.Mode, true); };
 
             list = new SeriesListPanel();
@@ -1732,6 +1303,9 @@ namespace UsageBar
 
             Deactivate += delegate
             {
+                // USAGEBAR_STICKY=1: test hook — ignore outside-click closing so
+                // automated screenshots don't race with real desktop activity
+                if (Environment.GetEnvironmentVariable("USAGEBAR_STICKY") == "1") return;
                 if (Visible)
                 {
                     LastDeactivateClose = DateTime.Now;
@@ -1831,6 +1405,20 @@ namespace UsageBar
         {
             if (idx >= 0 && idx < ctx.Store.Points.Count) return ctx.Store.Points[idx];
             return ctx.Store.Points.Count > 0 ? ctx.Store.Points[ctx.Store.Points.Count - 1] : null;
+        }
+
+        // the list follows the chart hover: whichever day the cursor is on, that
+        // day's per-series usage is listed (defaults to today) — same as the mac
+        // popover's displayPoint. Rows' values must be recomputed per day.
+        void SyncListTo(int idx)
+        {
+            DayPoint p = PointFor(idx);
+            if (p == null) return;
+            list.DisplayPoint = p;
+            string mode = ctx.Settings.Mode;
+            foreach (SeriesListPanel.Row r in list.Rows)
+                r.Today = ViewLogic.Value(p, r.Name, mode);
+            list.Invalidate();
         }
 
         void PickColor(string name)
@@ -2075,23 +1663,13 @@ namespace UsageBar
             ClientSize = new Size(w, bottomY + bottomH + pad);
         }
 
-        public void PositionAbove(Rectangle anchor)
+        // open just above the taskbar, horizontally near the cursor (Razer Synapse
+        // style: the panel appears where you clicked the tray icon)
+        public void PositionNearCursor()
         {
-            Screen screen = anchor != Rectangle.Empty
-                ? Screen.FromRectangle(anchor)
-                : Screen.PrimaryScreen;
-            Rectangle wa = screen.WorkingArea;
-            int x, yTop;
-            if (anchor != Rectangle.Empty)
-            {
-                x = anchor.Right - Width;
-                yTop = anchor.Top - Height - Program.Px(8);
-            }
-            else
-            {
-                x = wa.Right - Width - Program.Px(24);
-                yTop = wa.Bottom - Height - Program.Px(8);
-            }
+            Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+            int x = Cursor.Position.X - Width / 2;
+            int yTop = wa.Bottom - Height - Program.Px(8);
             if (x < wa.Left + Program.Px(8)) x = wa.Left + Program.Px(8);
             if (x + Width > wa.Right) x = wa.Right - Width - Program.Px(8);
             if (yTop < wa.Top) yTop = wa.Top + Program.Px(8);
@@ -2119,10 +1697,8 @@ namespace UsageBar
         readonly SynchronizationContext ui;
         NotifyIcon tray;
         FlyoutForm flyout;
-        TaskbarWidget widget;
         MessageWindow msgWin;
         System.Windows.Forms.Timer refreshTimer;   // 60s data refresh
-        System.Windows.Forms.Timer recheckTimer;   // 3s taskbar re-check (explorer restart, theme change)
         bool busy;
 
         public AppContext()
@@ -2132,8 +1708,7 @@ namespace UsageBar
             Store = new Store();
 
             msgWin = new MessageWindow(this);
-            widget = new TaskbarWidget(this);
-            Program.Log("ctor: msgWin+widget created");
+            Program.Log("ctor: msgWin created");
 
             tray = new NotifyIcon();
             tray.Icon = Bolt.MakeTrayIcon();
@@ -2142,7 +1717,7 @@ namespace UsageBar
             tray.ContextMenuStrip = BuildTrayMenu();
             tray.MouseClick += delegate(object s, MouseEventArgs e)
             {
-                if (e.Button == MouseButtons.Left) ToggleFlyout(Rectangle.Empty);
+                if (e.Button == MouseButtons.Left) ToggleFlyout();
             };
 
             flyout = new FlyoutForm(this);
@@ -2153,11 +1728,6 @@ namespace UsageBar
             refreshTimer.Tick += delegate { RefreshData(); };
             refreshTimer.Start();
 
-            recheckTimer = new System.Windows.Forms.Timer();
-            recheckTimer.Interval = 3000;
-            recheckTimer.Tick += delegate { widget.Recheck(); };
-            recheckTimer.Start();
-
             // one-time: add to 登录时打开 (HKCU Run), same as the mac first launch
             if (!Settings.FirstRunDone)
             {
@@ -2166,17 +1736,21 @@ namespace UsageBar
                 Settings.Save();
             }
 
-            widget.Recheck();
             RefreshData();
             Program.Log("ctor: done");
 
             if (Environment.GetEnvironmentVariable("USAGEBAR_AUTOSHOW") == "1")
             {
-                System.Threading.Timer t = null;
-                t = new System.Threading.Timer(delegate
+                // must tick on the UI thread — a Threading.Timer would Show() the
+                // flyout from a pool thread where it never becomes visible
+                System.Windows.Forms.Timer autoshow = new System.Windows.Forms.Timer();
+                autoshow.Interval = 3000;
+                autoshow.Tick += delegate
                 {
-                    ui.Post(delegate { ShowFlyout(widget.ScreenRect); }, null);
-                }, null, 3000, Timeout.Infinite);
+                    autoshow.Stop();
+                    ShowFlyout();
+                };
+                autoshow.Start();
             }
             if (Environment.GetEnvironmentVariable("USAGEBAR_FAKE_NO_ENGINE") == "1")
             {
@@ -2187,17 +1761,6 @@ namespace UsageBar
         ContextMenuStrip BuildTrayMenu()
         {
             ContextMenuStrip menu = new ContextMenuStrip();
-
-            ToolStripMenuItem widgetItem = new ToolStripMenuItem("显示任务栏数字");
-            widgetItem.Checked = Settings.ShowTaskbarWidget;
-            widgetItem.Click += delegate
-            {
-                Settings.ShowTaskbarWidget = !Settings.ShowTaskbarWidget;
-                widgetItem.Checked = Settings.ShowTaskbarWidget;
-                Settings.Save();
-                widget.Recheck();
-            };
-            menu.Items.Add(widgetItem);
 
             ToolStripMenuItem daily = new ToolStripMenuItem("终端日报");
             daily.Click += delegate { OpenDailyReport(); };
@@ -2210,7 +1773,7 @@ namespace UsageBar
             ToolStripMenuItem check = new ToolStripMenuItem("检查更新");
             check.Click += delegate
             {
-                ShowFlyout(widget.ScreenRect);
+                ShowFlyout();
                 CheckForUpdate();
             };
             menu.Items.Add(check);
@@ -2296,12 +1859,11 @@ namespace UsageBar
                         if (agents != null && agents.Count > 0) Store.SupportedAgents = agents;
                     }
                     tray.Text = "UsageBar — 今日 " + (Store.EngineMissing ? "n/a" : Store.Title + " tokens");
-                    widget.SetTitle(Store.Title);
                     if (flyout.Visible)
                     {
-                        // the layout height changed with data — re-anchor above the widget
+                        // the layout height changed with data — re-anchor
                         flyout.DataBind();
-                        flyout.PositionAbove(widget.ScreenRect);
+                        flyout.PositionNearCursor();
                     }
                 }, null);
             });
@@ -2309,24 +1871,24 @@ namespace UsageBar
 
         // MARK: flyout
 
-        public void ToggleFlyout(Rectangle anchor)
+        public void ToggleFlyout()
         {
             if (flyout.Visible)
             {
                 flyout.Hide();
                 return;
             }
-            // clicking our taskbar widget while the flyout is open just closed it via
+            // clicking the tray icon while the flyout is open just closed it via
             // Deactivate — don't immediately reopen (same toggle semantics as mac)
             if ((DateTime.Now - flyout.LastDeactivateClose).TotalMilliseconds < 400) return;
-            ShowFlyout(anchor);
+            ShowFlyout();
         }
 
-        public void ShowFlyout(Rectangle anchor)
+        public void ShowFlyout()
         {
             RefreshData();
             flyout.DataBind();
-            flyout.PositionAbove(anchor);
+            flyout.PositionNearCursor();
             flyout.Show();
             flyout.Activate();
         }
@@ -2513,14 +2075,13 @@ namespace UsageBar
 
         public void OnTaskbarCreated()
         {
-            // explorer restarted: re-add the tray icon, re-embed the widget
+            // explorer restarted: re-add the tray icon (tray icons vanish with it)
             try
             {
                 tray.Visible = false;
                 tray.Visible = true;
             }
             catch { }
-            ui.Post(delegate { widget.Recheck(); }, null);
         }
 
         // MARK: helpers

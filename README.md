@@ -1,8 +1,8 @@
 # UsageBar ⚡
 
-macOS 菜单栏 / Windows 任务栏的 AI CLI token 用量表：常驻显示今日用量，点开看 7 天曲线和精确数字，可按工具或按模型拆分。数据 100% 本地读取——它只是替你汇总各 AI CLI 自己写好的会话日志，不需要 API key，不上传任何数据。
+macOS 菜单栏 / Windows 托盘的 AI CLI token 用量表：常驻显示今日用量，点开看 7 天曲线和精确数字，可按工具或按模型拆分。数据 100% 本地读取——它只是替你汇总各 AI CLI 自己写好的会话日志，不需要 API key，不上传任何数据。
 
-A menu bar (macOS) / taskbar (Windows) app that tracks your AI CLI token usage (Claude Code, Codex, ZCode, OpenCode, Gemini CLI, Kimi, Qwen … — everything [ccusage](https://github.com/ccusage/ccusage) supports). 7-day chart + exact numbers, fully local.
+A menu bar (macOS) / system tray (Windows) app that tracks your AI CLI token usage (Claude Code, Codex, ZCode, OpenCode, Gemini CLI, Kimi, Qwen … — everything [ccusage](https://github.com/ccusage/ccusage) supports). 7-day chart + exact numbers, fully local.
 
 **Windows 用户直接看 [Windows 版](#windows-版) 一节。**
 
@@ -21,14 +21,15 @@ A menu bar (macOS) / taskbar (Windows) app that tracks your AI CLI token usage (
 
 ## Windows 版
 
-同一份数据引擎（ccusage），Windows 上以任务栏常驻的形式呈现。Windows 托盘只能放方形小图标、放不下文字数字，所以采用 TrafficMonitor 同款方案：把一个无边框小窗**嵌入任务栏托盘区左侧**，常驻显示 `⚡今日用量`，点击弹出 7 天报表。托盘图标作为备用入口（右键菜单），任务栏嵌入不可用时自动回退为纯托盘模式。
+同一份数据引擎（ccusage），Windows 上做成**系统托盘应用**（Razer Synapse 那种形态）：托盘常驻一枚 ⚡ 图标，左键点击弹出用量面板，右键出菜单。
 
-- **任务栏小窗**：`⚡1669.3万` 常驻显示今日用量，每 60 秒自动刷新；Explorer 重启后自动重新嵌入，位置自适应 DPI
-- **弹出面板**（点击小窗或托盘图标）：按工具/按模型切换、系列勾选、7 天平滑曲线、逐日用量列表、颜色自定义——与 macOS 版面板一致；Esc 或点击外部关闭
-- **托盘右键菜单**：显示/隐藏任务栏数字、终端日报、立即刷新、检查更新、开机自启、退出
+- **托盘图标**：悬停 tooltip 显示今日用量；Explorer 重启后自动恢复图标
+- **弹出面板**（左键托盘图标）：按工具/按模型切换、系列勾选、7 天平滑曲线、逐日用量列表（跟随图表悬停显示对应那天各工具/模型的用量）、颜色自定义——与 macOS 版面板一致；Esc 或点击外部关闭
+- **托盘右键菜单**：终端日报、立即刷新、检查更新、开机自启、退出
 - **检查更新**：一个按钮查两处——ccusage 新版（npm registry，一键升级）与 UsageBar 本体（GitHub Release）
 - **数据 100% 本地**：`ccusage daily --offline --json --by-agent`，不联网上传
 - 首次启动自动添加开机自启（HKCU Run，可随时在菜单里关闭），检测到 ccusage 未安装时面板引导一键 `npm i -g ccusage`
+- 提示：Windows 默认把新托盘图标收进溢出区（^）。想让它常驻可见：右键任务栏 → 任务栏设置 → 其他系统托盘图标 → 打开 UsageBar
 
 **构建（零依赖）**：Windows 10/11 自带 C# 编译器（csc.exe），不需要装任何 SDK：
 
