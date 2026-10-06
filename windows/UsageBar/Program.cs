@@ -1273,7 +1273,7 @@ namespace UsageBar
             checkBtn = MakeBottomButton("检查更新");
             quitBtn = MakeBottomButton("退出");
             dailyBtn.Click += delegate { ctx.OpenDailyReport(); };
-            refreshBtn.Click += delegate { ctx.RefreshData(); };
+            refreshBtn.Click += delegate { ctx.RefreshData(true); };
             checkBtn.Click += delegate { ctx.CheckForUpdate(); };
             quitBtn.Click += delegate { ctx.Quit(); };
             autostartCheck = new CheckBox();
@@ -1742,13 +1742,16 @@ namespace UsageBar
             if (Environment.GetEnvironmentVariable("USAGEBAR_AUTOSHOW") == "1")
             {
                 // must tick on the UI thread — a Threading.Timer would Show() the
-                // flyout from a pool thread where it never becomes visible
+                // flyout from a pool thread where it never becomes visible.
+                // Opens twice so cold vs warm open timings can be compared.
+                int opens = 0;
                 System.Windows.Forms.Timer autoshow = new System.Windows.Forms.Timer();
                 autoshow.Interval = 3000;
                 autoshow.Tick += delegate
                 {
-                    autoshow.Stop();
+                    opens++;
                     ShowFlyout();
+                    if (opens >= 2) autoshow.Stop();
                 };
                 autoshow.Start();
             }
@@ -1756,6 +1759,12 @@ namespace UsageBar
             {
                 Store.EngineMissing = true;
             }
+
+            // pre-create the flyout's window handle (off-screen, then hidden) so
+            // the first tray click doesn't pay handle-creation + JIT cost
+            flyout.Location = new Point(-3000, -3000);
+            flyout.Show();
+            flyout.Hide();
         }
 
         ContextMenuStrip BuildTrayMenu()
@@ -1767,7 +1776,7 @@ namespace UsageBar
             menu.Items.Add(daily);
 
             ToolStripMenuItem refresh = new ToolStripMenuItem("立即刷新");
-            refresh.Click += delegate { RefreshData(); };
+            refresh.Click += delegate { RefreshData(true); };
             menu.Items.Add(refresh);
 
             ToolStripMenuItem check = new ToolStripMenuItem("检查更新");
@@ -1822,17 +1831,26 @@ namespace UsageBar
 
         // MARK: data refresh
 
-        public void RefreshData()
+        DateTime lastRefreshAt = DateTime.MinValue;
+
+        // force=true for explicit user actions (刷新按钮/菜单/引擎更新); the 60s
+        // timer and panel-open path are throttled so a tray click never kicks off
+        // a node process unless the data is actually stale
+        public void RefreshData() { RefreshData(false); }
+
+        public void RefreshData(bool force)
         {
             if (busy) return;
+            if (!force && (DateTime.Now - lastRefreshAt).TotalSeconds < 15) return;
             busy = true;
+            lastRefreshAt = DateTime.Now;
             bool needAgents = Store.SupportedAgents.Count == 0;
             ThreadPool.QueueUserWorkItem(delegate
             {
                 Payload payload = Environment.GetEnvironmentVariable("USAGEBAR_FAKE_NO_ENGINE") == "1"
                     ? null
                     : Ccusage.RunJSON();
-                bool engineInstalled = Ccusage.Installed();
+                bool engineInstalled = payload != null || Ccusage.Installed();  // skip the extra ccusage spawn when aggregation just succeeded
                 List<string> agents = needAgents ? Ccusage.ParseAgents() : null;
                 ui.Post(delegate
                 {
@@ -1886,11 +1904,17 @@ namespace UsageBar
 
         public void ShowFlyout()
         {
-            RefreshData();
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            RefreshData(false);
             flyout.DataBind();
+            long t1 = sw.ElapsedMilliseconds;
             flyout.PositionNearCursor();
             flyout.Show();
+            long t2 = sw.ElapsedMilliseconds;
             flyout.Activate();
+            // only log slow opens — the timing is for diagnosing "打开慢"
+            if (sw.ElapsedMilliseconds > 150)
+                Program.Log("ShowFlyout: databind=" + t1 + "ms show=" + (t2 - t1) + "ms total=" + sw.ElapsedMilliseconds + "ms");
         }
 
         public void SwitchMode(string mode)
@@ -1943,7 +1967,7 @@ namespace UsageBar
                     if (r.Code == 0)
                     {
                         Store.EngineMissing = false;
-                        RefreshData();
+                        RefreshData(true);
                     }
                     else
                     {
@@ -2015,7 +2039,7 @@ namespace UsageBar
                     if (r.Code == 0)
                     {
                         Store.SupportedAgents = new List<string>();  // re-parse from the new ccusage
-                        RefreshData();
+                        RefreshData(true);
                         CheckForUpdate();
                     }
                     else
