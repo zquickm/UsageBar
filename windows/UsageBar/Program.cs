@@ -843,7 +843,19 @@ namespace UsageBar
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(Color.White);
             int n = Points.Count;
-            if (n == 0) return;
+            if (n == 0)
+            {
+                // first refresh still in flight — placeholder instead of blank
+                using (Font font = Program.UiFont(12))
+                using (SolidBrush b = new SolidBrush(Color.FromArgb(160, 130, 130, 135)))
+                {
+                    StringFormat sf = new StringFormat();
+                    sf.Alignment = StringAlignment.Center;
+                    sf.LineAlignment = StringAlignment.Center;
+                    g.DrawString("加载中…", font, b, new RectangleF(0, 0, Width, Height), sf);
+                }
+                return;
+            }
 
             int padX = Program.Px(10);
             int labelH = Program.Px(14);
@@ -1590,6 +1602,13 @@ namespace UsageBar
 
         void LayoutContent()
         {
+            // branch on DATA STATE, not control.Visible — the getter returns the
+            // parent-chain result (false while the form is hidden), which made the
+            // pre-Show DataBind compute a broken layout that flashed for a second
+            // after every open until the refresh completed and relaid it out
+            bool missing = ctx.Store.EngineMissing;
+            bool showStrip = ctx.Store.Update != UpdateState.Idle;
+
             int pad = Program.Px(14);
             int w = Program.Px(380);
             int innerW = w - pad * 2;
@@ -1597,7 +1616,7 @@ namespace UsageBar
             int segH = Program.Px(26);
             int chartH = Program.Px(172);
 
-            if (mainContent.Visible)
+            if (!missing)
             {
                 segAgent.Bounds = new Rectangle(pad, y, Program.Px(68), segH);
                 segModel.Bounds = new Rectangle(pad + Program.Px(70), y, Program.Px(68), segH);
@@ -1617,14 +1636,14 @@ namespace UsageBar
             // 200x100 clips the chart/list to a corner
             mainContent.Bounds = new Rectangle(0, 0, w, y);
 
-            if (engineCard.Visible)
+            if (missing)
             {
                 int cardPad = Program.Px(10);
                 engineTitle.Location = new Point(cardPad, cardPad);
                 engineDesc.Location = new Point(cardPad, engineTitle.Bottom + Program.Px(6));
                 int flowY = engineDesc.Bottom + Program.Px(8);
                 int blockH;
-                if (engineNpmBtn.Visible)
+                if (ctx.Store.HasNpm && !ctx.Store.EngineInstalling)  // same rule as DataBind's engineNpmBtn.Visible
                 {
                     engineNpmBtn.Location = new Point(cardPad, flowY);
                     engineStatus.Location = new Point(cardPad + engineNpmBtn.Width + Program.Px(8), flowY + Program.Px(4));
@@ -1639,7 +1658,7 @@ namespace UsageBar
                 y += engineCard.Height + Program.Px(6);
             }
 
-            if (updateStrip.Visible)
+            if (showStrip)
             {
                 updateFlow.Location = new Point(Program.Px(2), Program.Px(2));
                 updateStrip.Bounds = new Rectangle(pad, y, innerW, updateFlow.Height + Program.Px(4));
@@ -1850,7 +1869,8 @@ namespace UsageBar
                 Payload payload = Environment.GetEnvironmentVariable("USAGEBAR_FAKE_NO_ENGINE") == "1"
                     ? null
                     : Ccusage.RunJSON();
-                bool engineInstalled = payload != null || Ccusage.Installed();  // skip the extra ccusage spawn when aggregation just succeeded
+                bool engineInstalled = (payload != null || Ccusage.Installed())
+                    && Environment.GetEnvironmentVariable("USAGEBAR_FAKE_NO_ENGINE") != "1";  // test hook: pretend the engine is missing
                 List<string> agents = needAgents ? Ccusage.ParseAgents() : null;
                 ui.Post(delegate
                 {
@@ -1915,6 +1935,7 @@ namespace UsageBar
             // only log slow opens — the timing is for diagnosing "打开慢"
             if (sw.ElapsedMilliseconds > 150)
                 Program.Log("ShowFlyout: databind=" + t1 + "ms show=" + (t2 - t1) + "ms total=" + sw.ElapsedMilliseconds + "ms");
+            Program.Log("ShowFlyout: flyoutLoc=" + flyout.Location + " flyoutSize=" + flyout.Size + " cursor=" + Cursor.Position);
         }
 
         public void SwitchMode(string mode)
