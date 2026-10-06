@@ -30,6 +30,7 @@ A menu bar (macOS) / system tray (Windows) app that tracks your AI CLI token usa
 - **数据 100% 本地**：`ccusage daily --offline --json --by-agent`，不联网上传
 - 首次启动自动添加开机自启（HKCU Run，可随时在菜单里关闭），检测到 ccusage 未安装时面板引导一键 `npm i -g ccusage`
 - 提示：Windows 默认把新托盘图标收进溢出区（^）。想让它常驻可见：右键任务栏 → 任务栏设置 → 其他系统托盘图标 → 打开 UsageBar
+- 提示：从 Releases 下载的 exe 未做代码签名，首次运行 Windows 可能弹 SmartScreen 蓝色提示——点**「更多信息」→「仍要运行」**即可（仅一次）；或用 PowerShell 执行 `Unblock-File .\UsageBar.exe` 去掉下载标记
 
 **构建（零依赖）**：Windows 10/11 自带 C# 编译器（csc.exe），不需要装任何 SDK：
 
