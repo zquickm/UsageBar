@@ -23,6 +23,8 @@ A menu bar (macOS) / system tray (Windows) app that tracks your AI CLI token usa
 
 同一份数据引擎（ccusage），Windows 上做成**系统托盘应用**（Razer Synapse 那种形态）：托盘常驻一枚 ⚡ 图标，左键点击弹出用量面板，右键出菜单。
 
+**安装**：从 [Releases](../../releases/latest) 下载 **`UsageBar-v*.exe`**（约 56 KB，免安装），双击即用；**Windows 需先装 [Node.js LTS](https://nodejs.org/)**，并在任意终端执行一次 `npm i -g ccusage`（面板检测到引擎缺失时也会引导）。
+
 - **托盘图标**：悬停 tooltip 显示今日用量；Explorer 重启后自动恢复图标
 - **弹出面板**（左键托盘图标）：按工具/按模型切换、系列勾选、7 天平滑曲线、逐日用量列表（跟随图表悬停显示对应那天各工具/模型的用量）、颜色自定义——与 macOS 版面板一致；Esc 或点击外部关闭
 - **托盘右键菜单**：终端日报、立即刷新、检查更新、开机自启、退出
