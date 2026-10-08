@@ -8,6 +8,8 @@
 //     like 12.3万 needs a real window), with graceful fallback to tray-only
 //   - the popover becomes a borderless flyout that closes on Esc / outside click
 //   - autostart = HKCU Run key, settings = %APPDATA%\UsageBar\settings.json
+//   - 首次启动创建开始菜单和桌面快捷方式；windows/install.ps1 提供完整用户安装和卸载入口
+//   - 重复启动唤起已运行的面板
 // Build: powershell -File windows\build.ps1   (uses the csc.exe shipped with
 // Windows; the exe runs on any Win10/11 — .NET Framework 4.8 is preinstalled)
 // Keep the code C# 5 compatible: the in-box compiler is C# 5 (no $"", no ?.).
@@ -20,6 +22,7 @@ using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -27,6 +30,14 @@ using System.Threading;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using Microsoft.Win32;
+
+// 资源管理器和安装器读取的版本信息（单文件构建，程序集属性就地声明；
+// 与 AppVersion、version.env 三处同步更新）
+[assembly: AssemblyTitle("UsageBar")]
+[assembly: AssemblyProduct("UsageBar")]
+[assembly: AssemblyDescription("AI CLI token 用量托盘表（ccusage 引擎）")]
+[assembly: AssemblyCompany("zquickm")]
+[assembly: AssemblyFileVersion("1.2.1")]
 
 namespace UsageBar
 {
@@ -44,9 +55,12 @@ namespace UsageBar
             {
                 if (!createdNew)
                 {
-                    MessageBox.Show("UsageBar 已经在运行。", "UsageBar");
+                    // 重复启动时唤起现有面板。
+                    Win32.PostMessageW(Win32.HWND_BROADCAST,
+                        Win32.RegisterWindowMessageW("UsageBar.ShowFlyout"), IntPtr.Zero, IntPtr.Zero);
                     return;
                 }
+                ConfigureCodexHome();
                 try { SetProcessDPIAware(); } catch { }
                 ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;  // TLS 1.2
                 Application.EnableVisualStyles();
@@ -69,6 +83,14 @@ namespace UsageBar
                 AppFontFamily = ResolveFontFamily(new[] { "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI" });
                 Application.Run(new AppContext());
             }
+        }
+
+        static void ConfigureCodexHome()
+        {
+            // 构建进程可能缺少已保存的 Codex 目录，启动时补读用户配置，供所有子进程继承。
+            if (String.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("CODEX_HOME")))
+                Environment.SetEnvironmentVariable("CODEX_HOME",
+                    Environment.GetEnvironmentVariable("CODEX_HOME", EnvironmentVariableTarget.User));
         }
 
         static FontFamily ResolveFontFamily(string[] candidates)
@@ -732,10 +754,14 @@ namespace UsageBar
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         public static extern uint RegisterWindowMessageW(string message);
 
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern bool PostMessageW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
         [DllImport("user32.dll")]
         public static extern bool DestroyIcon(IntPtr hIcon);
 
-        public static readonly IntPtr HWND_MESSAGE = new IntPtr(-3);
+        public static readonly IntPtr HWND_BROADCAST = new IntPtr(0xFFFF);
+        public const uint WS_EX_TOOLWINDOW = 0x80;
     }
 
     // MARK: - Bolt glyph (drawn, not a font glyph — no missing-character risk)
@@ -782,20 +808,24 @@ namespace UsageBar
         }
     }
 
-    // MARK: - Message-only window (TaskbarCreated → re-add tray icon after explorer restarts)
+    // 隐藏消息窗口：资源管理器重启恢复托盘，重复启动唤起面板。
 
     class MessageWindow : NativeWindow
     {
         const string ClassName = "UsageBarMsgWin";
         static bool classRegistered;
         static uint taskbarCreatedMsg;
+        static uint showFlyoutMsg;
         readonly AppContext ctx;
 
         public MessageWindow(AppContext context)
         {
             ctx = context;
             if (taskbarCreatedMsg == 0)
+            {
                 taskbarCreatedMsg = Win32.RegisterWindowMessageW("TaskbarCreated");
+                showFlyoutMsg = Win32.RegisterWindowMessageW("UsageBar.ShowFlyout");
+            }
             if (!classRegistered)
             {
                 Win32.WNDCLASS wc = new Win32.WNDCLASS();
@@ -805,8 +835,9 @@ namespace UsageBar
                 Win32.RegisterClassW(ref wc);
                 classRegistered = true;
             }
-            IntPtr h = Win32.CreateWindowExW(0, ClassName, "", 0, 0, 0, 0, 0,
-                Win32.HWND_MESSAGE, IntPtr.Zero, Marshal.GetHINSTANCE(typeof(Program).Module), IntPtr.Zero);
+            // 隐藏顶层工具窗口接收系统广播，消息专用窗口收不到广播。
+            IntPtr h = Win32.CreateWindowExW(Win32.WS_EX_TOOLWINDOW, ClassName, "", 0, 0, 0, 0, 0,
+                IntPtr.Zero, IntPtr.Zero, Marshal.GetHINSTANCE(typeof(Program).Module), IntPtr.Zero);
             if (h != IntPtr.Zero) AssignHandle(h);
         }
 
@@ -815,6 +846,10 @@ namespace UsageBar
             if (taskbarCreatedMsg != 0 && m.Msg == (int)taskbarCreatedMsg)
             {
                 ctx.OnTaskbarCreated();
+            }
+            else if (showFlyoutMsg != 0 && m.Msg == (int)showFlyoutMsg)
+            {
+                ctx.ShowFlyout();
             }
             base.WndProc(ref m);
         }
@@ -834,6 +869,7 @@ namespace UsageBar
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
                 | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+            Font = Program.UiFont(10);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -858,12 +894,17 @@ namespace UsageBar
             }
 
             int padX = Program.Px(10);
-            int labelH = Program.Px(14);
+            int labelH = Math.Max(Program.Px(14), Font.Height);
             int plotW = Math.Max(Width - padX * 2, 1);
             int plotH = Math.Max(Height - labelH - Program.Px(4), 1);
+            // 顶部留白随画幅和 DPI 调整，避免峰值与线宽贴边被裁切。
+            float plotTop = Math.Max(Program.Px(8), plotH * 0.06f);
+            float plotBottom = plotH - Program.Px(2);
+            float plotRange = Math.Max(plotBottom - plotTop, 1f);
             float step = n > 1 ? (float)plotW / (n - 1) : 0;
             Func<int, float> xOf = delegate(int i) { return padX + i * step; };
 
+            // 所有已选系列共用坐标轴，上限包含总量，避免隐藏主系列后总量被压在顶边。
             long yMax = 1;
             foreach (string name in SeriesNames)
                 foreach (DayPoint p in Points)
@@ -871,10 +912,33 @@ namespace UsageBar
                     long v = ViewLogic.Value(p, name, CurrentMode);
                     if (v > yMax) yMax = v;
                 }
-            Func<int, long, float> yOf = delegate(int i, long v)
+
+            // 量级差距较大时共用幂次比例尺，提高小系列可读性；精确用量以列表为准。
+            // ponytail: 幂次下限为 0.25，极小系列可能低于 20% 画高；需要显示时再放宽下限。
+            double pow = 1.0;
             {
-                float frac = v <= 0 ? 0f : (float)((double)v / yMax);
-                return 2 + (1f - frac) * (plotH - 4);
+                long minPeak = 0;
+                foreach (string name in SeriesNames)
+                {
+                    if (name == "总量") continue;
+                    long peak = 0;
+                    foreach (DayPoint pt in Points)
+                    {
+                        long v = ViewLogic.Value(pt, name, CurrentMode);
+                        if (v > peak) peak = v;
+                    }
+                    if (peak > 0 && (minPeak == 0 || peak < minPeak)) minPeak = peak;
+                }
+                if (minPeak > 0 && yMax > minPeak)
+                {
+                    double r = (double)minPeak / yMax;
+                    if (r < 0.2) pow = Math.Max(0.25, Math.Log(0.2) / Math.Log(r));
+                }
+            }
+            Func<long, float> yOf = delegate(long v)
+            {
+                double frac = v <= 0 ? 0.0 : Math.Pow((double)v / yMax, pow);
+                return plotBottom - (float)frac * plotRange;
             };
 
             // per-day dashed gridlines
@@ -888,18 +952,30 @@ namespace UsageBar
                 }
             }
 
-            // series lines (总量 dashed like mac; others solid, cardinal-spline smoothed)
+            // 总量先画成半透明虚线，避免遮住与之重合的工具曲线。
+            if (SeriesNames.Contains("总量"))
+            {
+                Color c = ColorFor != null ? ColorFor("总量") : Color.Gray;
+                PointF[] pts = new PointF[n];
+                for (int i = 0; i < n; i++) pts[i] = new PointF(xOf(i), yOf(ViewLogic.Value(Points[i], "总量", CurrentMode)));
+                using (GraphicsPath path = MonotonePath(pts))
+                using (Pen pen = new Pen(Color.FromArgb(150, c), 1.75f * Program.Scale))
+                {
+                    pen.DashPattern = new float[] { 5f, 3f };
+                    g.DrawPath(pen, path);
+                }
+            }
+
+            // 各系列独立采用单调三次插值，保持零值段与零轴重合。
             foreach (string name in SeriesNames)
             {
+                if (name == "总量") continue;
                 Color c = ColorFor != null ? ColorFor(name) : Color.Gray;
                 PointF[] pts = new PointF[n];
-                for (int i = 0; i < n; i++) pts[i] = new PointF(xOf(i), yOf(i, ViewLogic.Value(Points[i], name, CurrentMode)));
-                using (Pen pen = new Pen(c, name == "总量" ? 2f : 2.5f))
-                {
-                    if (name == "总量") pen.DashPattern = new float[] { 5f, 3f };
-                    if (n >= 2) g.DrawCurve(pen, pts, 0.5f);
-                    else g.DrawLine(pen, pts[0], pts[0]);
-                }
+                for (int i = 0; i < n; i++) pts[i] = new PointF(xOf(i), yOf(ViewLogic.Value(Points[i], name, CurrentMode)));
+                using (GraphicsPath path = MonotonePath(pts))
+                using (Pen pen = new Pen(c, 2.5f * Program.Scale))
+                    g.DrawPath(pen, path);
             }
 
             // hover rule
@@ -913,23 +989,68 @@ namespace UsageBar
             }
 
             // x labels
-            using (Font font = Program.UiFont(10))
             using (SolidBrush b = new SolidBrush(Color.FromArgb(150, 120, 120, 125)))
+            using (StringFormat sf = new StringFormat())
             {
-                StringFormat sf = new StringFormat();
                 sf.Alignment = StringAlignment.Center;
+                float lastRight = -Program.Px(4);
+                float lastWidth = g.MeasureString(Fmt.CnDate(Points[n - 1].Date), Font).Width;
                 for (int i = 0; i < n; i++)
                 {
-                    float x = xOf(i);
-                    if (x < 14) x = 14;
-                    if (x > Width - 14) x = Width - 14;
-                    g.DrawString(Fmt.CnDate(Points[i].Date), font, b, x, plotH + 3, sf);
+                    string label = Fmt.CnDate(Points[i].Date);
+                    float labelW = g.MeasureString(label, Font).Width;
+                    float x = Math.Max(labelW / 2, Math.Min(Width - labelW / 2, xOf(i)));
+                    // 窄画幅优先保留首尾日期，省略会重叠的中间刻度。
+                    if (i > 0 && i < n - 1 && (x - labelW / 2 < lastRight + Program.Px(4)
+                        || x + labelW / 2 + Program.Px(4) > Width - lastWidth)) continue;
+                    g.DrawString(label, Font, b, x, plotH + Program.Px(3), sf);
+                    lastRight = x + labelW / 2;
                 }
             }
         }
 
         string CurrentMode { get { return AppCtx != null ? AppCtx.Settings.Mode : "agent"; } }
         public AppContext AppCtx;
+
+        // 使用 Fritsch–Carlson 单调三次插值构造 Bézier 路径，曲线保持在相邻端点之间。
+        static GraphicsPath MonotonePath(PointF[] pts)
+        {
+            GraphicsPath path = new GraphicsPath();
+            int n = pts.Length;
+            if (n < 2) { if (n == 1) path.AddLine(pts[0], pts[0]); return path; }
+            float[] d = new float[n - 1];
+            for (int i = 0; i < n - 1; i++)
+            {
+                float dx = pts[i + 1].X - pts[i].X;
+                d[i] = dx != 0 ? (pts[i + 1].Y - pts[i].Y) / dx : 0;
+            }
+            float[] m = new float[n];
+            m[0] = d[0];
+            m[n - 1] = d[n - 2];
+            // 峰谷处切线归零，防止平滑曲线超过相邻数据点。
+            for (int i = 1; i < n - 1; i++)
+                m[i] = d[i - 1] * d[i] <= 0 ? 0 : 0.5f * (d[i - 1] + d[i]);
+            for (int i = 0; i < n - 1; i++)
+            {
+                if (d[i] == 0) { m[i] = 0; m[i + 1] = 0; continue; }
+                float t0 = m[i] / d[i], t1 = m[i + 1] / d[i];
+                float t2 = t0 * t0 + t1 * t1;
+                if (t2 > 9f)
+                {
+                    float s = 3f / (float)Math.Sqrt(t2);
+                    m[i] = s * t0 * d[i];
+                    m[i + 1] = s * t1 * d[i];
+                }
+            }
+            for (int i = 0; i < n - 1; i++)
+            {
+                float h = pts[i + 1].X - pts[i].X;
+                PointF c1 = new PointF(pts[i].X + h / 3f, pts[i].Y + m[i] * h / 3f);
+                PointF c2 = new PointF(pts[i + 1].X - h / 3f, pts[i + 1].Y - m[i + 1] * h / 3f);
+                path.AddBezier(pts[i], c1, c2, pts[i + 1]);
+            }
+            return path;
+        }
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
@@ -1609,12 +1730,18 @@ namespace UsageBar
             bool missing = ctx.Store.EngineMissing;
             bool showStrip = ctx.Store.Update != UpdateState.Idle;
 
+            Rectangle workingArea = Screen.FromPoint(Cursor.Position).WorkingArea;
             int pad = Program.Px(14);
-            int w = Program.Px(380);
+            int w = Math.Min(Program.Px(380), workingArea.Width - Program.Px(16));
             int innerW = w - pad * 2;
             int y = pad;
             int segH = Program.Px(26);
-            int chartH = Program.Px(172);
+            // 保持画幅比例，并为列表、更新提示和底栏预留屏幕高度。
+            int otherH = pad * 2 + segH + list.AutoHeight + Program.Px(30)
+                + Program.Px(10) + Program.Px(8) * 3 + Program.Px(6) + 1
+                + (showStrip ? updateFlow.Height + Program.Px(8) : 0);
+            int chartH = Math.Max(Program.Px(80), Math.Min((int)Math.Round(innerW * 172.0 / 352),
+                workingArea.Height - Program.Px(16) - otherH));
 
             if (!missing)
             {
@@ -1686,7 +1813,7 @@ namespace UsageBar
         // style: the panel appears where you clicked the tray icon)
         public void PositionNearCursor()
         {
-            Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+            Rectangle wa = Screen.FromPoint(Cursor.Position).WorkingArea;
             int x = Cursor.Position.X - Width / 2;
             int yTop = wa.Bottom - Height - Program.Px(8);
             if (x < wa.Left + Program.Px(8)) x = wa.Left + Program.Px(8);
@@ -1722,7 +1849,8 @@ namespace UsageBar
 
         public AppContext()
         {
-            ui = SynchronizationContext.Current ?? new SynchronizationContext();
+            // 将后台结果切回 WinForms 主线程，避免更新控件时引发跨线程异常。
+            ui = new WindowsFormsSynchronizationContext();
             Settings = Settings.Load();
             Store = new Store();
 
@@ -1747,9 +1875,10 @@ namespace UsageBar
             refreshTimer.Tick += delegate { RefreshData(); };
             refreshTimer.Start();
 
-            // one-time: add to 登录时打开 (HKCU Run), same as the mac first launch
+            // 首次启动创建开始菜单和桌面快捷方式，并注册开机自启。
             if (!Settings.FirstRunDone)
             {
+                CreateShortcuts();
                 SetAutostart(true);
                 Settings.FirstRunDone = true;
                 Settings.Save();
@@ -1843,6 +1972,40 @@ namespace UsageBar
                 {
                     if (on) k.SetValue("UsageBar", "\"" + Application.ExecutablePath + "\"");
                     else if (k.GetValue("UsageBar") != null) k.DeleteValue("UsageBar");
+                }
+            }
+            catch { }
+        }
+
+        // 首次启动创建开始菜单和桌面快捷方式。
+
+        static void CreateShortcuts()
+        {
+            try
+            {
+                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType == null) return;
+                dynamic shell = Activator.CreateInstance(shellType);
+                string exe = Application.ExecutablePath;
+                string[] dirs = new string[]
+                {
+                    Environment.GetFolderPath(Environment.SpecialFolder.Programs),
+                    Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory)
+                };
+                foreach (string dir in dirs)
+                {
+                    try
+                    {
+                        string lnkPath = System.IO.Path.Combine(dir, "UsageBar.lnk");
+                        if (File.Exists(lnkPath)) continue;   // 保留用户现有快捷方式。
+                        dynamic lnk = shell.CreateShortcut(lnkPath);
+                        lnk.TargetPath = exe;
+                        lnk.WorkingDirectory = System.IO.Path.GetDirectoryName(exe);
+                        lnk.IconLocation = exe + ",0";
+                        lnk.Description = "UsageBar — AI CLI token 用量表";
+                        lnk.Save();
+                    }
+                    catch { }
                 }
             }
             catch { }

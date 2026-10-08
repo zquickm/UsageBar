@@ -11,9 +11,9 @@ A menu bar (macOS) / system tray (Windows) app that tracks your AI CLI token usa
 ## 它能做什么
 
 - **菜单栏常驻**：⚡ 后面是今日 token 总量（如 `⚡12.3万`），每 60 秒自动刷新
-- **点开弹窗**：最近 7 天平滑曲线 + 当日/7 天精确用量；悬停任意一天看当天的数；按天虚线网格
+- **点开弹窗**：最近 7 天用量曲线 + 当日/7 天精确用量；悬停任意一天看当天的数；按天虚线网格
 - **两种视角**：按工具（zcode / codex / claude …）或按模型（GLM-5.3 / gpt …）拆分，一键切换
-- **想看谁就勾谁**：默认只显示总量；在工具/模型下拉里勾选即加入曲线，列表与曲线完全同步，一键恢复默认
+- **想看谁就勾谁**：默认只显示总量；在工具/模型下拉里勾选即加入折线图，列表与图表完全同步，一键恢复默认
 - **可定制**：用量列表拖拽排序（记住顺序）、点色块用系统色轮改颜色
 - **终端日报**：底部「终端日报」按钮在 Terminal 打开用量报表；可选安装的 `usage` 命令还能在终端独立使用
 - **开机自启**：面板内开关（登录项方式）
@@ -23,16 +23,31 @@ A menu bar (macOS) / system tray (Windows) app that tracks your AI CLI token usa
 
 同一份数据引擎（ccusage），Windows 上做成**系统托盘应用**（Razer Synapse 那种形态）：托盘常驻一枚 ⚡ 图标，左键点击弹出用量面板，右键出菜单。
 
-**安装**：从 [Releases](../../releases/latest) 下载 **`UsageBar-v*.exe`**（约 56 KB，免安装），双击即用；**Windows 需先装 [Node.js LTS](https://nodejs.org/)**，并在任意终端执行一次 `npm i -g ccusage`（面板检测到引擎缺失时也会引导）。
+**安装**：两种方式任选其一——
+
+1. **免安装便携**：从 [Releases](../../releases/latest) 下载 **`UsageBar-v*.exe`**（约 100 KB），双击即用。首次运行会像常见桌面软件一样自动创建**开始菜单 + 桌面快捷方式**并添加开机自启。
+2. **完整安装**（装到固定位置，可在「设置 → 应用」里卸载）：
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File windows\install.ps1                        # 源码构建 + 安装 + 启动
+   powershell -ExecutionPolicy Bypass -File windows\install.ps1 -Exe UsageBar.exe      # 直接安装下载好的 exe
+   powershell -ExecutionPolicy Bypass -File windows\install.ps1 -Uninstall             # 卸载
+   ```
+
+   安装到 `%LocalAppData%\Programs\UsageBar`（免管理员权限），创建开始菜单 + 桌面快捷方式，并在 设置 → 应用 / 控制面板「程序和功能」注册卸载入口；安装时移除下载标记。
+
+**Windows 需先装 [Node.js LTS](https://nodejs.org/)**，并在任意终端执行一次 `npm i -g ccusage`（面板检测到引擎缺失时也会引导）。
 
 - **托盘图标**：悬停 tooltip 显示今日用量；Explorer 重启后自动恢复图标
-- **弹出面板**（左键托盘图标）：按工具/按模型切换、系列勾选、7 天平滑曲线、逐日用量列表（跟随图表悬停显示对应那天各工具/模型的用量）、颜色自定义——与 macOS 版面板一致；Esc 或点击外部关闭
+- **再次打开**：双击快捷方式或再次运行 exe，不弹「已经在运行」——直接唤出正在运行的 UsageBar 面板
+- **弹出面板**（左键托盘图标）：按工具/按模型切换、系列勾选、7 天平滑折线图、逐日用量列表（跟随图表悬停显示对应那天各工具/模型的用量）、颜色自定义——与 macOS 版面板一致；Esc 或点击外部关闭
+- **图表自适应**：单调曲线避免峰谷过冲，峰顶留白、日期刻度和画幅随可用空间及缩放比例调整；各系列共享按数据范围调整的坐标轴，量级差距大时压缩比例尺，精确数值以列表为准。
 - **托盘右键菜单**：终端日报、立即刷新、检查更新、开机自启、退出
 - **检查更新**：一个按钮查两处——ccusage 新版（npm registry，一键升级）与 UsageBar 本体（GitHub Release）
 - **数据 100% 本地**：`ccusage daily --offline --json --by-agent`，不联网上传
 - 首次启动自动添加开机自启（HKCU Run，可随时在菜单里关闭），检测到 ccusage 未安装时面板引导一键 `npm i -g ccusage`
 - 提示：Windows 默认把新托盘图标收进溢出区（^）。想让它常驻可见：右键任务栏 → 任务栏设置 → 其他系统托盘图标 → 打开 UsageBar
-- 提示：从 Releases 下载的 exe 未做代码签名，首次运行 Windows 可能弹 SmartScreen 蓝色提示——点**「更多信息」→「仍要运行」**即可（仅一次）；或用 PowerShell 执行 `Unblock-File .\UsageBar.exe` 去掉下载标记
+- 提示：从 Releases 下载的 exe 未做代码签名，首次运行 Windows 可能弹 SmartScreen 蓝色提示——点**「更多信息」→「仍要运行」**；用 `install.ps1 -Exe` 安装会自动去掉下载标记。
 
 **构建（零依赖）**：Windows 10/11 自带 C# 编译器（csc.exe），不需要装任何 SDK：
 
@@ -41,7 +56,7 @@ powershell -ExecutionPolicy Bypass -File windows\build.ps1          # 构建
 powershell -ExecutionPolicy Bypass -File windows\build.ps1 -Run     # 构建并运行
 ```
 
-产物：`windows\dist\UsageBar.exe`（单文件约 100 KB；Win10/11 直接运行，.NET Framework 4.8 系统预装）。源码就一个文件：`windows/UsageBar/Program.cs`（C# 5 + WinForms，与 mac 版"核心一个文件"对称）。数据引擎 ccusage 未装时面板会给出安装引导；没有 npm 时先装 [Node.js LTS](https://nodejs.org/)。
+产物：`windows\dist\UsageBar.exe`（单文件约 100 KB，带 ⚡ 图标与版本信息；Win10/11 直接运行，.NET Framework 4.8 系统预装）。图标 `windows/UsageBar/app.ico` 由仓库根的 `Icon.iconset` 生成。源码就一个文件：`windows/UsageBar/Program.cs`（C# 5 + WinForms，与 mac 版"核心一个文件"对称）。数据引擎 ccusage 未装时面板会给出安装引导；没有 npm 时先装 [Node.js LTS](https://nodejs.org/)。
 
 ## 系统要求
 
@@ -86,7 +101,7 @@ git clone https://github.com/zquickm/UsageBar && cd UsageBar && ./install.sh
   - 顶部切换 **按工具 / 按模型**；
   - 图表默认只画「总量」，点开下方工具/模型下拉**勾选**想看的系列；「恢复默认」回到只看总量；
   - 列表可**拖拽排序**（顺序会记住），点系列前的**色块**改颜色；
-  - 鼠标悬停曲线，面板显示那一天的日期和各系列精确用量；
+  - 鼠标悬停图表，面板显示那一天的日期和各系列精确用量；
   - 底部按钮：**终端日报**（Terminal 里看近 7 天明细表）、**开机自启**、**刷新**、**退出**。
 - **终端里**（可选增强，`install.sh` 提供）：
 
@@ -112,6 +127,7 @@ usage --bar    # ⚡ 今日摘要块（菜单栏同款格式）
 ## 常见问题
 
 - **菜单栏显示 `n/a`？** 先在终端跑 `ccusage daily` 看有无数据或报错；也确认你确实用过受支持的 CLI、日志已生成。
+- **Windows 缺少 Codex/GPT 用量？** 确认 `CODEX_HOME` 指向实际 Codex 数据目录。UsageBar 启动时会在进程未设置该变量时读取 Windows 用户级配置，再由 ccusage 读取会话日志并统计；目录配置变更后重启 UsageBar。
 - **金额是 `$0`？** ccusage 离线定价数据里没有该模型的价格，token 数不受影响。
 - **提示需要 python3？** 只有想用可选的终端 `usage` 命令才需要，执行 `xcode-select --install` 即可。
 - **我用的 CLI 不被支持？** UsageBar 不维护工具白名单，等 ccusage 支持后即自动计入，无需更新本应用。
@@ -120,6 +136,8 @@ usage --bar    # ⚡ 今日摘要块（菜单栏同款格式）
 
 - **更新**：下载新版 Release 替换 /Applications 里的 app 即可。
 - **卸载**：面板 → 退出，删除 UsageBar.app；建议卸载前先关掉「开机自启」。装过可选增强的话再删 `~/.local/bin/usage`；不再需要 ccusage 的话顺带 `brew uninstall ccusage`（或 `npm uninstall -g ccusage`）。
+- **Windows 更新**：重新下载 exe 覆盖，或重跑 `windows\install.ps1`。
+- **Windows 卸载**：完整安装在 **设置 → 应用 → UsageBar → 卸载**（同时移除快捷方式与开机自启；设置保留在 `%APPDATA%\UsageBar`）。便携版直接删 exe 和两个 `.lnk`，再到面板菜单关掉「开机自启」。
 
 ## 从源码构建
 
