@@ -5,3 +5,6 @@
 UsageBar-v*.zip
 UsageBar-v*.dmg
 Icon.icns
+
+# Windows 截图产物
+windows/*.png

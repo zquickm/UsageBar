@@ -17,7 +17,7 @@ $csc = $cscCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $csc) { throw "csc.exe not found — .NET Framework 4.x is required to build." }
 Write-Host "Compiler: $csc"
 
-$src = Join-Path $PSScriptRoot "UsageBar\Program.cs"
+$src = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'UsageBar') -Filter '*.cs' | Select-Object -ExpandProperty FullName)
 $ico = Join-Path $PSScriptRoot "UsageBar\app.ico"   # 图标来自 ../Icon.iconset
 $outDir = Join-Path $PSScriptRoot "dist"
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null

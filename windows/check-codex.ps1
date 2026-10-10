@@ -61,7 +61,7 @@ $cscCandidates = @(
 $csc = $cscCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $csc) { throw "csc.exe not found" }
 
-$src = Join-Path $PSScriptRoot "UsageBar\Program.cs"
+$src = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'UsageBar') -Filter '*.cs' | Select-Object -ExpandProperty FullName)
 $out = Join-Path $env:TEMP "usagebar-check-codex.exe"
 & $csc /nologo /target:exe /out:$out /main:UsageBar.CodexEnvironmentTest `
     /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll `

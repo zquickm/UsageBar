@@ -162,13 +162,19 @@ namespace UsageBar
         public string AgentOrder = "";
         public string ModelOrder = "";
         public bool FirstRunDone = false;
+        public List<RemoteConnection> RemoteConnections = new List<RemoteConnection>();
 
-        static string Path()
+        public static string DirectoryPath()
         {
             string dir = System.IO.Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "UsageBar");
             if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-            return System.IO.Path.Combine(dir, "settings.json");
+            return dir;
+        }
+
+        static string Path()
+        {
+            return System.IO.Path.Combine(DirectoryPath(), "settings.json");
         }
 
         public static Settings Load()
@@ -219,11 +225,13 @@ namespace UsageBar
         public Dictionary<string, long> Agents;
         public Dictionary<string, long> Models;
 
+        public DayPoint() : this("") { }
+
         public DayPoint(string date)
         {
             Date = date;
-            Agents = new Dictionary<string, long>();
-            Models = new Dictionary<string, long>();
+            Agents = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            Models = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
         }
     }
 
@@ -280,6 +288,11 @@ namespace UsageBar
         // run through cmd so npm's ccusage.cmd shim resolves from PATH
         public static RunResult Run(string command, int timeoutMs)
         {
+            return RunProcess("cmd.exe", "/c " + command, timeoutMs);
+        }
+
+        public static RunResult RunProcess(string file, string arguments, int timeoutMs)
+        {
             RunResult r = new RunResult();
             r.Code = -1;
             r.Out = "";
@@ -287,16 +300,18 @@ namespace UsageBar
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo();
-                psi.FileName = "cmd.exe";
-                psi.Arguments = "/c " + command;
+                psi.FileName = file;
+                psi.Arguments = arguments;
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
+                psi.RedirectStandardInput = true;
                 psi.StandardOutputEncoding = Encoding.UTF8;
                 psi.StandardErrorEncoding = Encoding.UTF8;
                 using (Process p = Process.Start(psi))
                 {
+                    p.StandardInput.Close();
                     string stdout = null, stderr = null;
                     Thread outT = new Thread(delegate() { stdout = p.StandardOutput.ReadToEnd(); });
                     Thread errT = new Thread(delegate() { stderr = p.StandardError.ReadToEnd(); });
@@ -358,17 +373,19 @@ namespace UsageBar
 
         static long AsLong(object o)
         {
-            if (o is int) return (int)o;
-            if (o is long) return (long)o;
-            if (o is decimal) return Convert.ToInt64((decimal)o);
-            if (o is double) return Convert.ToInt64((double)o);
-            return 0;
+            if (o == null) return 0;
+            if (!(o is int || o is long || o is decimal || o is double)) throw new FormatException("Token 必须为数字");
+            decimal number = Convert.ToDecimal(o);
+            if (number != Decimal.Truncate(number)) throw new FormatException("Token 必须为整数");
+            long value = Convert.ToInt64(o);
+            if (value < 0) throw new FormatException("Token 不能为负数");
+            return value;
         }
 
         static void AddTo(Dictionary<string, long> dict, string key, long v)
         {
             if (!dict.ContainsKey(key)) dict[key] = 0;
-            dict[key] += v;
+            dict[key] = checked(dict[key] + v);
         }
 
         // Full-history fetch (3650 days) like the mac app: the chart slices the last
@@ -376,66 +393,81 @@ namespace UsageBar
         // big JSON call per refresh; if that ever hurts, switch to a shorter window.
         public static Payload RunJSON()
         {
-            DateTime today = DateTime.Today;
+            DateTime today = UsageMerge.Today;
             DateTime start = today.AddDays(-3649);
             string since = start.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
-            RunResult r = Run("ccusage daily --since " + since + " --offline --json --by-agent", 120000);
+            RunResult r = Run("ccusage daily --since " + since + " --until " + UsageMerge.DateKey(today)
+                + " --timezone Asia/Shanghai --offline --json --by-agent", 120000);
             if (r.Code != 0)
             {
                 Program.Log("RunJSON: ccusage exit=" + r.Code + " err=" + (r.Err ?? "").Trim());
                 return null;
             }
 
+            try { return ParseJSON(r.Out, today, true); }
+            catch (Exception ex) { Program.Log("RunJSON: " + ex.GetType().Name); return null; }
+        }
+
+        public static Payload ParseJSON(string json, DateTime today, bool localLedger)
+        {
+            DateTime start = today.AddDays(-3649);
+            string since = UsageMerge.DateKey(start);
             JavaScriptSerializer js = new JavaScriptSerializer();
             js.MaxJsonLength = int.MaxValue;
             Dictionary<string, object> root;
-            try { root = js.Deserialize<Dictionary<string, object>>(r.Out); }
+            try { root = js.Deserialize<Dictionary<string, object>>(json); }
             catch (Exception ex)
             {
-                Program.Log("RunJSON: parse failed: " + ex.Message);
-                return null;
+                throw new FormatException("用量 JSON 无效", ex);
             }
             if (root == null)
             {
-                Program.Log("RunJSON: root null");
-                return null;
+                throw new FormatException("用量 JSON 为空");
             }
 
             Dictionary<string, Dictionary<string, long>> agentsByDay = new Dictionary<string, Dictionary<string, long>>();
             Dictionary<string, Dictionary<string, long>> modelsByDay = new Dictionary<string, Dictionary<string, long>>();
 
             object[] daily = AsArr(root.ContainsKey("daily") ? root["daily"] : null);
+            if (daily == null) throw new FormatException("缺少 daily 日报");
             if (daily != null)
             {
                 foreach (object dayObj in daily)
                 {
                     Dictionary<string, object> day = AsDict(dayObj);
-                    if (day == null) continue;
+                    if (day == null) throw new FormatException("日报结构无效");
                     string key = day.ContainsKey("period") ? (AsStr(day["period"]) ?? AsStr(day.ContainsKey("date") ? day["date"] : null)) : AsStr(day.ContainsKey("date") ? day["date"] : null);
-                    if (key == null) continue;
+                    DateTime date;
+                    if (!DateTime.TryParseExact(key, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out date)) throw new FormatException("日报日期无效");
+                    if (date < start || date > today) continue;
                     Dictionary<string, long> ag;
                     Dictionary<string, long> md;
-                    if (!agentsByDay.TryGetValue(key, out ag)) { ag = new Dictionary<string, long>(); agentsByDay[key] = ag; }
-                    if (!modelsByDay.TryGetValue(key, out md)) { md = new Dictionary<string, long>(); modelsByDay[key] = md; }
+                    if (!agentsByDay.TryGetValue(key, out ag)) { ag = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase); agentsByDay[key] = ag; }
+                    if (!modelsByDay.TryGetValue(key, out md)) { md = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase); modelsByDay[key] = md; }
                     object[] agentArr = AsArr(day.ContainsKey("agents") ? day["agents"] : null);
-                    if (agentArr == null) continue;
+                    if (agentArr == null) throw new FormatException("缺少工具分类，请使用 --by-agent");
                     foreach (object agentObj in agentArr)
                     {
                         Dictionary<string, object> a = AsDict(agentObj);
-                        if (a == null) continue;
-                        string agentName = AsStr(a.ContainsKey("agent") ? a["agent"] : null) ?? "?";
-                        AddTo(ag, agentName, AsLong(a.ContainsKey("totalTokens") ? a["totalTokens"] : null));
+                        if (a == null) throw new FormatException("工具分类结构无效");
+                        string agentName = AsStr(a.ContainsKey("agent") ? a["agent"] : null);
+                        if (String.IsNullOrWhiteSpace(agentName)) throw new FormatException("工具名称无效");
+                        if (!a.ContainsKey("totalTokens") || a["totalTokens"] == null) throw new FormatException("缺少工具 Token 总数");
+                        AddTo(ag, agentName, AsLong(a["totalTokens"]));
                         object[] mbArr = AsArr(a.ContainsKey("modelBreakdowns") ? a["modelBreakdowns"] : null);
                         if (mbArr == null) continue;
                         foreach (object mbObj in mbArr)
                         {
                             Dictionary<string, object> m = AsDict(mbObj);
-                            if (m == null) continue;
-                            long t = AsLong(m.ContainsKey("inputTokens") ? m["inputTokens"] : null)
+                            if (m == null) throw new FormatException("模型分类结构无效");
+                            string modelName = AsStr(m.ContainsKey("modelName") ? m["modelName"] : null);
+                            if (String.IsNullOrWhiteSpace(modelName)) throw new FormatException("模型名称无效");
+                            long t = checked(AsLong(m.ContainsKey("inputTokens") ? m["inputTokens"] : null)
                                    + AsLong(m.ContainsKey("outputTokens") ? m["outputTokens"] : null)
                                    + AsLong(m.ContainsKey("cacheCreationTokens") ? m["cacheCreationTokens"] : null)
-                                   + AsLong(m.ContainsKey("cacheReadTokens") ? m["cacheReadTokens"] : null);
-                            AddTo(md, AsStr(m.ContainsKey("modelName") ? m["modelName"] : null) ?? "?", t);
+                                   + AsLong(m.ContainsKey("cacheReadTokens") ? m["cacheReadTokens"] : null));
+                            AddTo(md, modelName, t);
                         }
                     }
                 }
@@ -446,7 +478,7 @@ namespace UsageBar
             {
                 string dshPath = System.IO.Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dsh", ".dshw-usage.json");
-                if (File.Exists(dshPath))
+                if (localLedger && File.Exists(dshPath))
                 {
                     Dictionary<string, object> ledger = js.Deserialize<Dictionary<string, object>>(File.ReadAllText(dshPath, Encoding.UTF8));
                     object[] events = ledger != null ? AsArr(ledger.ContainsKey("events") ? ledger["events"] : null) : null;
@@ -471,7 +503,7 @@ namespace UsageBar
             List<DayPoint> days = new List<DayPoint>();
             for (DateTime cur = start; cur <= today; cur = cur.AddDays(1))
             {
-                string k = cur.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+                string k = UsageMerge.DateKey(cur);
                 DayPoint dp = new DayPoint(k);
                 Dictionary<string, long> ag;
                 Dictionary<string, long> md;
@@ -531,7 +563,7 @@ namespace UsageBar
         static readonly string[] AgentOrderKnown = { "总量", "zcode", "codex", "dsh" };
         static readonly string[] ModelOrderKnown = { "总量", "GLM-5.3-Flash", "GLM-5.3", "deepseek-flash" };
 
-        static readonly Dictionary<string, Color> AgentColor = new Dictionary<string, Color>
+        static readonly Dictionary<string, Color> AgentColor = new Dictionary<string, Color>(StringComparer.OrdinalIgnoreCase)
         {
             { "zcode", Color.FromArgb(0, 122, 255) },
             { "codex", Color.FromArgb(175, 82, 222) },
@@ -564,7 +596,7 @@ namespace UsageBar
 
         public static Dictionary<string, Color> ParseColorOverrides(string stored)
         {
-            Dictionary<string, Color> map = new Dictionary<string, Color>();
+            Dictionary<string, Color> map = new Dictionary<string, Color>(StringComparer.OrdinalIgnoreCase);
             if (String.IsNullOrEmpty(stored)) return map;
             foreach (string part in stored.Split(';'))
             {
@@ -572,10 +604,12 @@ namespace UsageBar
                 if (kv.Length != 2) continue;
                 try
                 {
+                    string hex = kv[1].TrimStart('#');
+                    if (hex.Length != 6) continue;
                     map[kv[0]] = Color.FromArgb(
-                        Convert.ToInt32(kv[1].Substring(0, 2), 16),
-                        Convert.ToInt32(kv[1].Substring(2, 2), 16),
-                        Convert.ToInt32(kv[1].Substring(4, 2), 16));
+                        Convert.ToInt32(hex.Substring(0, 2), 16),
+                        Convert.ToInt32(hex.Substring(2, 2), 16),
+                        Convert.ToInt32(hex.Substring(4, 2), 16));
                 }
                 catch { }
             }
@@ -586,7 +620,7 @@ namespace UsageBar
 
         public static HashSet<string> Discovered(Store store, string mode)
         {
-            HashSet<string> names = new HashSet<string>();
+            HashSet<string> names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (mode == "model")
             {
                 foreach (string m in store.KnownModels) names.Add(m);  // full window
@@ -620,7 +654,7 @@ namespace UsageBar
 
         public static Dictionary<string, long> WindowTotals(Store store, HashSet<string> discovered, string mode)
         {
-            Dictionary<string, long> t = new Dictionary<string, long>();
+            Dictionary<string, long> t = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
             foreach (DayPoint p in store.Points)
             {
                 foreach (string n in discovered)
@@ -638,11 +672,11 @@ namespace UsageBar
             string stored = settings.VisibleFor(mode);
             if (String.IsNullOrEmpty(stored))
             {
-                HashSet<string> def = new HashSet<string>();
+                HashSet<string> def = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 def.Add("总量");
                 return def;
             }
-            return new HashSet<string>(stored.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries));
+            return new HashSet<string>(stored.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries), StringComparer.OrdinalIgnoreCase);
         }
 
         public static void SetVisible(Settings settings, string mode, HashSet<string> names)
@@ -656,16 +690,19 @@ namespace UsageBar
             HashSet<string> visible = VisibleSet(settings, mode);
             HashSet<string> discovered = Discovered(store, mode);
             List<string> names = new List<string>();
-            foreach (string n in visible)
-                if (discovered.Contains(n)) names.Add(n);
+            foreach (string n in discovered)
+                if (visible.Contains(n)) names.Add(n);
 
             string[] known = mode == "agent" ? AgentOrderKnown : ModelOrderKnown;
             List<string> ordered = new List<string>();
             foreach (string k in known)
-                if (names.Contains(k)) ordered.Add(k);
+            {
+                string match = names.Find(n => String.Equals(n, k, StringComparison.OrdinalIgnoreCase));
+                if (match != null) ordered.Add(match);
+            }
             List<string> rest = new List<string>();
             foreach (string n in names)
-                if (Array.IndexOf(known, n) < 0) rest.Add(n);
+                if (!known.Any(k => String.Equals(k, n, StringComparison.OrdinalIgnoreCase))) rest.Add(n);
             rest.Sort(StringComparer.Ordinal);
             ordered.AddRange(rest);
             if (ordered.Count == 0) ordered.Add("总量");
@@ -683,7 +720,10 @@ namespace UsageBar
             if (!String.IsNullOrEmpty(savedCsv))
             {
                 foreach (string n in savedCsv.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
-                    if (series.Contains(n) && !saved.Contains(n)) saved.Add(n);
+                {
+                    string match = series.Find(s => String.Equals(s, n, StringComparison.OrdinalIgnoreCase));
+                    if (match != null && !saved.Contains(match)) saved.Add(match);
+                }
             }
             List<string> rest = new List<string>();
             foreach (string n in series)
@@ -1296,7 +1336,7 @@ namespace UsageBar
         FlowLayoutPanel updateFlow;
 
         Panel bottomBar;
-        Button dailyBtn, refreshBtn, checkBtn, quitBtn;
+        Button dailyBtn, refreshBtn, checkBtn, quitBtn, remoteBtn;
         CheckBox autostartCheck;
 
         public System.Windows.Forms.Timer dismissTimer;
@@ -1405,6 +1445,8 @@ namespace UsageBar
             refreshBtn = MakeBottomButton("刷新");
             checkBtn = MakeBottomButton("检查更新");
             quitBtn = MakeBottomButton("退出");
+            remoteBtn = MakeBottomButton("远程连接");
+            remoteBtn.Click += delegate { ctx.OpenRemoteConnections(); };
             dailyBtn.Click += delegate { ctx.OpenDailyReport(); };
             refreshBtn.Click += delegate { ctx.RefreshData(true); };
             checkBtn.Click += delegate { ctx.CheckForUpdate(); };
@@ -1420,6 +1462,7 @@ namespace UsageBar
             bottomBar.Controls.Add(checkBtn);
             bottomBar.Controls.Add(quitBtn);
             bottomBar.Controls.Add(autostartCheck);
+            bottomBar.Controls.Add(remoteBtn);
             Controls.Add(bottomBar);
 
             dismissTimer = new System.Windows.Forms.Timer();
@@ -1436,6 +1479,7 @@ namespace UsageBar
 
             Deactivate += delegate
             {
+                if (ctx.RemoteDialogOpen) return;
                 // USAGEBAR_STICKY=1: test hook — ignore outside-click closing so
                 // automated screenshots don't race with real desktop activity
                 if (Environment.GetEnvironmentVariable("USAGEBAR_STICKY") == "1") return;
@@ -1635,6 +1679,10 @@ namespace UsageBar
 
             RebuildUpdateStrip();
             autostartCheck.Checked = AppContext.IsAutostartOn();
+            int enabled = ctx.Remotes.States.Count(s => s.Connection.Enabled);
+            int failed = ctx.Remotes.States.Count(s => s.Connection.Enabled && s.Error != null);
+            remoteBtn.Text = "远程连接" + (enabled == 0 ? "" : "（" + enabled + "）")
+                + (failed == 0 ? "" : " · " + failed + " 项失败");
             LayoutContent();
         }
 
@@ -1737,7 +1785,7 @@ namespace UsageBar
             int y = pad;
             int segH = Program.Px(26);
             // 保持画幅比例，并为列表、更新提示和底栏预留屏幕高度。
-            int otherH = pad * 2 + segH + list.AutoHeight + Program.Px(30)
+            int otherH = pad * 2 + segH + list.AutoHeight + Program.Px(64)
                 + Program.Px(10) + Program.Px(8) * 3 + Program.Px(6) + 1
                 + (showStrip ? updateFlow.Height + Program.Px(8) : 0);
             int chartH = Math.Max(Program.Px(80), Math.Min((int)Math.Round(innerW * 172.0 / 352),
@@ -1792,11 +1840,11 @@ namespace UsageBar
                 y += updateStrip.Height + Program.Px(4);
             }
 
-            int bottomH = Program.Px(30);
+            int bottomH = Program.Px(64);
             int bottomY = y + Program.Px(8);
             bottomBar.Bounds = new Rectangle(0, bottomY, w, bottomH);
             int bx = pad + innerW;
-            int by = (bottomH - quitBtn.Height) / 2;
+            int by = (Program.Px(30) - quitBtn.Height) / 2;
             quitBtn.Location = new Point(bx - quitBtn.Width, by);
             bx -= quitBtn.Width + Program.Px(6);
             checkBtn.Location = new Point(bx - checkBtn.Width, by);
@@ -1805,6 +1853,7 @@ namespace UsageBar
             bx -= refreshBtn.Width + Program.Px(10);
             autostartCheck.Location = new Point(bx - autostartCheck.Width, by + Program.Px(2));
             dailyBtn.Location = new Point(pad, by);
+            remoteBtn.Bounds = new Rectangle(pad, Program.Px(34), innerW, Program.Px(26));
 
             ClientSize = new Size(w, bottomY + bottomH + pad);
         }
@@ -1839,6 +1888,11 @@ namespace UsageBar
     {
         public readonly Settings Settings;
         public readonly Store Store;
+        public readonly RemoteSources Remotes;
+        RemoteConnectionsForm remoteDialog;
+        Payload localPayload;
+        bool localEngineMissing;
+        public bool RemoteDialogOpen { get { return remoteDialog != null; } }
 
         readonly SynchronizationContext ui;
         NotifyIcon tray;
@@ -1853,6 +1907,7 @@ namespace UsageBar
             ui = new WindowsFormsSynchronizationContext();
             Settings = Settings.Load();
             Store = new Store();
+            Remotes = new RemoteSources(Settings, System.IO.Path.Combine(Settings.DirectoryPath(), "remote-cache.json"));
 
             msgWin = new MessageWindow(this);
             Program.Log("ctor: msgWin created");
@@ -1868,6 +1923,7 @@ namespace UsageBar
             };
 
             flyout = new FlyoutForm(this);
+            ApplyCombined();
             Program.Log("ctor: flyout created");
 
             refreshTimer = new System.Windows.Forms.Timer();
@@ -2022,8 +2078,9 @@ namespace UsageBar
 
         public void RefreshData(bool force)
         {
-            if (busy) return;
             if (!force && (DateTime.Now - lastRefreshAt).TotalSeconds < 15) return;
+            foreach (RemoteState state in Remotes.States.ToArray()) RefreshRemote(state, false);
+            if (busy) return;
             busy = true;
             lastRefreshAt = DateTime.Now;
             bool needAgents = Store.SupportedAgents.Count == 0;
@@ -2038,36 +2095,105 @@ namespace UsageBar
                 ui.Post(delegate
                 {
                     busy = false;
+                    localEngineMissing = !engineInstalled;
                     if (payload == null)
                     {
-                        Store.Title = "n/a";
-                        Store.EngineMissing = !engineInstalled;
-                        if (Store.EngineMissing) DetectInstallers();
+                        if (localEngineMissing) DetectInstallers();
                     }
                     else
                     {
-                        Store.EngineMissing = false;
-                        Store.EngineError = null;
-                        Store.AllDays = payload.Days;
-                        Store.Points = payload.Days.Count > 7
-                            ? payload.Days.GetRange(payload.Days.Count - 7, 7)
-                            : payload.Days;
-                        Store.KnownModels = new HashSet<string>();
-                        foreach (DayPoint d in payload.Days)
-                            foreach (string m in d.Models.Keys) Store.KnownModels.Add(m);
-                        Store.Total = payload.Total;
-                        Store.Title = Fmt.Human(payload.Total);
+                        localPayload = payload;
                         if (agents != null && agents.Count > 0) Store.SupportedAgents = agents;
                     }
-                    tray.Text = "UsageBar — 今日 " + (Store.EngineMissing ? "n/a" : Store.Title + " tokens");
-                    if (flyout.Visible)
-                    {
-                        // the layout height changed with data — re-anchor
-                        flyout.DataBind();
-                        flyout.PositionNearCursor();
-                    }
+                    ApplyCombined();
                 }, null);
             });
+        }
+
+        void ApplyCombined()
+        {
+            bool hasData = localPayload != null || Remotes.States.Any(s => s.Connection.Enabled && s.Data != null);
+            if (hasData)
+            {
+                try
+                {
+                    Payload payload = Remotes.Combine(localPayload, UsageMerge.Today);
+                    Store.EngineMissing = false;
+                    Store.EngineError = null;
+                    Store.AllDays = payload.Days;
+                    Store.Points = payload.Days.Skip(Math.Max(0, payload.Days.Count - 7)).ToList();
+                    Store.KnownModels = new HashSet<string>(payload.Days.SelectMany(d => d.Models.Keys), StringComparer.OrdinalIgnoreCase);
+                    Store.Total = payload.Total;
+                    Store.Title = Fmt.Human(payload.Total);
+                }
+                catch (Exception ex) { Remotes.CacheError = "用量无法合并：" + ex.GetType().Name; }
+            }
+            else
+            {
+                Store.EngineMissing = localEngineMissing;
+                Store.Total = 0;
+                Store.Title = "n/a";
+                Store.AllDays = new List<DayPoint>();
+                Store.Points = new List<DayPoint>();
+                Store.KnownModels.Clear();
+            }
+            tray.Text = "UsageBar — 今日 " + Store.Title + " tokens";
+            UpdateRemoteViews();
+        }
+
+        void UpdateRemoteViews()
+        {
+            if (remoteDialog != null && !remoteDialog.IsDisposed) remoteDialog.Rebind();
+            if (flyout != null && flyout.Visible)
+            {
+                flyout.DataBind();
+                flyout.PositionNearCursor();
+            }
+        }
+
+        void RefreshRemote(RemoteState state, bool test)
+        {
+            int generation = Remotes.Begin(state, test);
+            if (generation < 0) return;
+            RemoteConnection connection = new RemoteConnection { Alias = state.Connection.Alias, System = state.Connection.System };
+            UpdateRemoteViews();
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                Payload payload = null;
+                string error = null;
+                try
+                {
+                    DateTime today = UsageMerge.Today;
+                    Ccusage.RunResult result = RemoteEngine.Run(connection, today);
+                    if (result.Code != 0) error = RemoteEngine.Error(result);
+                    else payload = Ccusage.ParseJSON(result.Out, today, false);
+                }
+                catch (Exception ex) { error = "远端用量数据无效：" + ex.GetType().Name; }
+                ui.Post(delegate
+                {
+                    if (Remotes.Complete(state, generation, payload, error)) ApplyCombined();
+                }, null);
+            });
+        }
+
+        void RemoteConfigurationChanged()
+        {
+            Settings.Save();
+            ApplyCombined();
+            foreach (RemoteState state in Remotes.States.ToArray()) RefreshRemote(state, false);
+        }
+
+        public void OpenRemoteConnections()
+        {
+            if (remoteDialog != null) { remoteDialog.Activate(); return; }
+            remoteDialog = new RemoteConnectionsForm(Remotes,
+                delegate(RemoteState state) { RefreshRemote(state, true); }, RemoteConfigurationChanged);
+            try { remoteDialog.ShowDialog(flyout); }
+            finally
+            {
+                remoteDialog.Dispose();
+                remoteDialog = null;
+            }
         }
 
         // MARK: flyout

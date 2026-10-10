@@ -1,8 +1,8 @@
 # UsageBar ⚡
 
-macOS 菜单栏 / Windows 托盘的 AI CLI token 用量表：常驻显示今日用量，点开看 7 天曲线和精确数字，可按工具或按模型拆分。数据 100% 本地读取——它只是替你汇总各 AI CLI 自己写好的会话日志，不需要 API key，不上传任何数据。
+macOS 菜单栏 / Windows 托盘的 AI CLI token 用量表：常驻显示今日用量，点开看 7 天曲线和精确数字，可按工具或按模型拆分。默认读取本机会话日志；Windows 还可通过 SSH 汇总远程机器的 ccusage 日报。不需要 API key，不上传到第三方服务。
 
-A menu bar (macOS) / system tray (Windows) app that tracks your AI CLI token usage (Claude Code, Codex, ZCode, OpenCode, Gemini CLI, Kimi, Qwen … — everything [ccusage](https://github.com/ccusage/ccusage) supports). 7-day chart + exact numbers, fully local.
+A menu bar (macOS) / system tray (Windows) app that tracks your AI CLI token usage (Claude Code, Codex, ZCode, OpenCode, Gemini CLI, Kimi, Qwen … — everything [ccusage](https://github.com/ccusage/ccusage) supports). 7-day chart + exact numbers, local by default, with optional SSH aggregation on Windows.
 
 **Windows 用户直接看 [Windows 版](#windows-版) 一节。**
 
@@ -17,7 +17,7 @@ A menu bar (macOS) / system tray (Windows) app that tracks your AI CLI token usa
 - **可定制**：用量列表拖拽排序（记住顺序）、点色块用系统色轮改颜色
 - **终端日报**：底部「终端日报」按钮在 Terminal 打开用量报表；可选安装的 `usage` 命令还能在终端独立使用
 - **开机自启**：面板内开关（登录项方式）
-- **检查更新**：一个按钮查两处——引擎 ccusage 新版（npm registry，一键升级，自动跟随 brew/npm）和 UsageBar 新版（GitHub Release，一键跳转下载）；仅点击时联网
+- **检查更新**：一个按钮查两处——引擎 ccusage 新版（npm registry，一键升级，自动跟随 brew/npm）和 UsageBar 新版（GitHub Release，一键跳转下载）；更新检查仅点击时联网，已启用的远程连接会每分钟通过 SSH 刷新
 
 ## Windows 版
 
@@ -44,7 +44,8 @@ A menu bar (macOS) / system tray (Windows) app that tracks your AI CLI token usa
 - **图表自适应**：单调曲线避免峰谷过冲，峰顶留白、日期刻度和画幅随可用空间及缩放比例调整；各系列共享按数据范围调整的坐标轴，量级差距大时压缩比例尺，精确数值以列表为准。
 - **托盘右键菜单**：终端日报、立即刷新、检查更新、开机自启、退出
 - **检查更新**：一个按钮查两处——ccusage 新版（npm registry，一键升级）与 UsageBar 本体（GitHub Release）
-- **数据 100% 本地**：`ccusage daily --offline --json --by-agent`，不联网上传
+- **本机和远程用量**：本机默认读取；底部「远程连接」可添加多台 Linux / Windows 机器，通过 SSH 获取日报。同日期、同名工具和模型直接相加，名称忽略大小写，不增加服务器统计行。
+- **断线缓存**：每 60 秒自动刷新，远端单次最多等待 30 秒；断线时保留上次成功日报，连接窗口显示失败状态和最后成功时间。停用或移除连接立即停止计入。
 - 首次启动自动添加开机自启（HKCU Run，可随时在菜单里关闭），检测到 ccusage 未安装时面板引导一键 `npm i -g ccusage`
 - 提示：Windows 默认把新托盘图标收进溢出区（^）。想让它常驻可见：右键任务栏 → 任务栏设置 → 其他系统托盘图标 → 打开 UsageBar
 - 提示：从 Releases 下载的 exe 未做代码签名，首次运行 Windows 可能弹 SmartScreen 蓝色提示——点**「更多信息」→「仍要运行」**；用 `install.ps1 -Exe` 安装会自动去掉下载标记。
@@ -56,7 +57,28 @@ powershell -ExecutionPolicy Bypass -File windows\build.ps1          # 构建
 powershell -ExecutionPolicy Bypass -File windows\build.ps1 -Run     # 构建并运行
 ```
 
-产物：`windows\dist\UsageBar.exe`（单文件约 100 KB，带 ⚡ 图标与版本信息；Win10/11 直接运行，.NET Framework 4.8 系统预装）。图标 `windows/UsageBar/app.ico` 由仓库根的 `Icon.iconset` 生成。源码就一个文件：`windows/UsageBar/Program.cs`（C# 5 + WinForms，与 mac 版"核心一个文件"对称）。数据引擎 ccusage 未装时面板会给出安装引导；没有 npm 时先装 [Node.js LTS](https://nodejs.org/)。
+产物：`windows\dist\UsageBar.exe`（单文件，带 ⚡ 图标与版本信息；Win10/11 直接运行，.NET Framework 4.8 系统预装）。图标 `windows/UsageBar/app.ico` 由仓库根的 `Icon.iconset` 生成。界面和本机引擎在 `windows/UsageBar/Program.cs`，远程连接与缓存在 `windows/UsageBar/RemoteUsage.cs`，均兼容 C# 5。数据引擎 ccusage 未装时面板会给出安装引导；没有 npm 时先装 [Node.js LTS](https://nodejs.org/)。
+
+### Windows 远程连接
+
+本机需要 Windows OpenSSH 客户端；远端需启用 SSH，并在自己的账号下安装 ccusage。连接使用系统 SSH 配置的别名，主机、端口、用户名、密钥和代理均由 SSH 管理；UsageBar 不保存密码或私钥内容，不跳过主机指纹验证。密码或密钥口令需要交互输入时，请先配置密钥或 ssh-agent。
+
+先在终端运行 `ssh server99`：作用是验证自己的登录账号，并人工核对首次连接的主机指纹。然后点击底部「远程连接」，填写该别名、选择 Linux 或 Windows、点击「添加」。勾选决定是否参与汇总；「测试连接」立即读取日报，「移除」删除连接及其缓存。
+
+Linux 优先使用 `~/.local/bin/ccusage`，否则从 PATH 查找。Windows 优先使用当前账号的 `%APPDATA%\npm\ccusage.cmd`，否则从 PATH 查找 `ccusage.cmd` 或 `ccusage.exe`。其他机器不会被自动安装或升级引擎。可以运行 `npm i -g ccusage@20.0.26`：作用是在该账号的 npm 全局目录安装已验证兼容的引擎版本，需要 Node.js 和 npm。
+
+只传输 Token 日报，不复制会话数据库、提示词或凭据。远端使用登录账号的默认日志目录和空 ccusage 配置，不使用管理员权限，也不接受其他用户的数据路径。日期统一按北京时间分组；保留与本机一致的 3650 天发现窗口，图表仍显示近 7 天。本机自定义 `.dsh` 账本只在本机追加一次。
+
+连接配置保存在 `%APPDATA%\UsageBar\settings.json`，日报缓存保存在同目录的 `remote-cache.json`；重启可恢复。同一会话若在两台机器都保存了日志，会按要求重复相加；也不要用多个 SSH 别名重复添加同一台机器。工具总量沿用 ccusage 的 `totalTokens`，模型沿用输入、输出、缓存创建和缓存读取分项之和，两者可能有细微差异。
+
+远程测试命令（默认不联网、不改真实设置）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File windows\check-remote.ps1
+powershell -ExecutionPolicy Bypass -File windows\check-remote.ps1 -Live -WindowsScript -UI
+```
+
+第一条检查解析、合并、缓存、异常与参数安全；第二条额外连接已配置的 `server99`，在本机执行 Windows 远端脚本，并检查 100%–200% DPI 下的界面。Windows 脚本验证不等于另一台 Windows 机器的 SSH 实机验证。
 
 ## 系统要求
 
@@ -120,9 +142,9 @@ usage --bar    # ⚡ 今日摘要块（菜单栏同款格式）
 (~/.zcode, ~/.codex, ~/.claude …)                                    （菜单栏）
 ```
 
-- 应用对 ccusage 只发**一次**聚合调用（`ccusage daily --by-agent --offline`），聚合、可选的 `~/.dsh` 账本合并都在应用内完成——没有中间脚本，装好 ccusage 就能用。
+- 应用对每个启用的数据来源各发一次 ccusage 聚合调用（`ccusage daily --by-agent --offline`），在本机合并日报；可选的 `~/.dsh` 账本仅在本机追加。
 - 支持哪些工具、出现过哪些模型，**完全跟随你安装的 ccusage**：新工具在 ccusage 认识它日志的那天自动出现，新模型用过的当天自动出现，UsageBar 不需要跟着发版。
-- ccusage 以 `--offline` 模式运行，不联网取价——整条链路数据不出你的机器。
+- ccusage 以 `--offline` 模式运行，不联网取价。默认只读取本机；Windows 启用远程连接后，远端日报通过 SSH 加密传到本机，不发送到第三方服务。
 
 ## 常见问题
 
