@@ -37,13 +37,13 @@ using Microsoft.Win32;
 [assembly: AssemblyProduct("UsageBar")]
 [assembly: AssemblyDescription("AI CLI token 用量托盘表（ccusage 引擎）")]
 [assembly: AssemblyCompany("zquickm")]
-[assembly: AssemblyFileVersion("1.2.2")]
+[assembly: AssemblyFileVersion("1.3.0")]
 
 namespace UsageBar
 {
     static class Program
     {
-        public const string AppVersion = "1.2.2";  // 与 version.env 的 MARKETING_VERSION 保持一致
+        public const string AppVersion = "1.3.0";  // 与 version.env 的 MARKETING_VERSION 保持一致
         public static float Scale = 1f;
         public static FontFamily AppFontFamily;
 
