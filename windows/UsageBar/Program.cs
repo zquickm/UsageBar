@@ -1140,11 +1140,12 @@ namespace UsageBar
         public Action<string, string> OnReorder;
         public int HoverIndex = -1;
         int dragIndex = -1;
+        int scrollOffset;   // the mac list lives in a ScrollView; rows beyond the height cap are reached by wheel here
 
         public SeriesListPanel()
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
-                | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+                | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
             Cursor = Cursors.Hand;
         }
 
@@ -1159,11 +1160,17 @@ namespace UsageBar
             }
         }
 
-        int RowAt(int y) { return (y - HeaderHeight) / RowHeight; }
+        public int MaxScroll
+        {
+            get { return Math.Max(0, Rows.Count * RowHeight + HeaderHeight + Program.Px(10) - AutoHeight); }
+        }
+
+        int RowAt(int y) { return (y - HeaderHeight + scrollOffset) / RowHeight; }
 
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
+            scrollOffset = Math.Min(scrollOffset, MaxScroll);
             Graphics g = e.Graphics;
             g.Clear(Color.White);
             if (DisplayPoint == null || Rows.Count == 0) return;
@@ -1186,11 +1193,11 @@ namespace UsageBar
                 using (SolidBrush hb = new SolidBrush(Color.FromArgb(140, 110, 110, 115)))
                 {
                     TextRenderer.DrawText(g, Fmt.CnDate(DisplayPoint.Date) + " 用量", headerFont,
-                        new Rectangle(nameX, 0, nameW + Program.Px(60), HeaderHeight),
+                        new Rectangle(nameX, -scrollOffset, nameW + Program.Px(60), HeaderHeight),
                         Color.FromArgb(140, 110, 110, 115),
                         TextFormatFlags.NoPadding | TextFormatFlags.VerticalCenter | TextFormatFlags.Left);
                     TextRenderer.DrawText(g, "7天", headerFont,
-                        new Rectangle(weekLeft - Program.Px(20), 0, Program.Px(20) + weekW, HeaderHeight),
+                        new Rectangle(weekLeft - Program.Px(20), -scrollOffset, Program.Px(20) + weekW, HeaderHeight),
                         Color.FromArgb(170, 120, 120, 125),
                         TextFormatFlags.NoPadding | TextFormatFlags.VerticalCenter | TextFormatFlags.Right);
                 }
@@ -1198,7 +1205,8 @@ namespace UsageBar
                 for (int i = 0; i < Rows.Count; i++)
                 {
                     Row row = Rows[i];
-                    int y = HeaderHeight + i * RowHeight;
+                    int y = HeaderHeight + i * RowHeight - scrollOffset;
+                    if (y + RowHeight <= 0 || y >= Height) continue;
                     Rectangle rowRect = new Rectangle(pad, y, Width - pad * 2, RowHeight);
 
                     if (i == HoverIndex && dragIndex == -1)
@@ -1284,6 +1292,29 @@ namespace UsageBar
         {
             base.OnMouseLeave(e);
             if (HoverIndex != -1) { HoverIndex = -1; Invalidate(); }
+        }
+
+        protected override void OnMouseEnter(EventArgs e)
+        {
+            base.OnMouseEnter(e);
+            // WinForms routes WM_MOUSEWHEEL to the focused control, so the wheel
+            // only reaches the list if it holds focus; take it on hover (when there
+            // is something to scroll) so scrolling works without a click first
+            if (MaxScroll > 0 && !Focused) Focus();
+        }
+
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            base.OnMouseWheel(e);
+            int max = MaxScroll;
+            if (max == 0) return;
+            int lines = Math.Max(1, SystemInformation.MouseWheelScrollLines);
+            int target = Math.Max(0, Math.Min(max, scrollOffset - Math.Sign(e.Delta) * lines * RowHeight));
+            if (target != scrollOffset)
+            {
+                scrollOffset = target;
+                Invalidate();
+            }
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
